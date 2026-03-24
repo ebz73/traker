@@ -5277,11 +5277,13 @@ def _scrape_with_chrome_cdp(
     original_price_selector: Optional[str] = None,
     resolved_cdp_endpoint: Optional[Tuple[str, Dict[str, str]]] = None,
     proxy_config: Optional[dict] = None,
+    skip_captcha_check: bool = False,
+    max_attempts_override: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """Scrape price using the remote Chrome container via CDP."""
-    max_attempts = int(os.getenv("SCRAPE_MAX_ATTEMPTS", "3"))
+    max_attempts = max_attempts_override if max_attempts_override is not None else int(os.getenv("SCRAPE_MAX_ATTEMPTS", "3"))
     scraped_domain = _get_domain(url)
-    if _is_domain_captcha_blocked(scraped_domain):
+    if not skip_captcha_check and _is_domain_captcha_blocked(scraped_domain):
         remaining = _get_captcha_cooldown_remaining(scraped_domain)
         return {
             "status": "captcha_blocked",
@@ -5295,6 +5297,7 @@ def _scrape_with_chrome_cdp(
             "source": "chrome_cdp",
         }
     had_real_content = False
+    had_captcha = False  # Track if any attempt hit CAPTCHA
     wall_deadline = time.time() + CDP_SCRAPE_MAX_WALL_SECONDS
     per_attempt_context = _url_matches_any_domain(url, BOT_AGGRESSIVE_DOMAINS)
     pw = None
@@ -5378,19 +5381,13 @@ def _scrape_with_chrome_cdp(
                             continue
                         page_title = (page.title() or "").strip()
                         if any(bot_word in page_title.lower() for bot_word in BOT_TITLE_MARKERS):
-                            logger.warning("CDP bot challenge title detected for %s: %s", url, page_title)
-                            _mark_domain_captcha_blocked(scraped_domain)
-                            return {
-                                "status": "captcha_blocked",
-                                "error": (
-                                    f"Bot protection detected on {scraped_domain}. "
-                                    f"Use the browser extension to check this price. "
-                                    f"CDP will retry automatically in {int(CAPTCHA_COOLDOWN_SECONDS // 60)} minutes."
-                                ),
-                                "domain": scraped_domain,
-                                "cooldown_remaining": CAPTCHA_COOLDOWN_SECONDS,
-                                "source": "chrome_cdp",
-                            }
+                            logger.warning("CDP bot challenge title detected for %s on attempt %d: %s", url, attempt + 1, page_title)
+                            try:
+                                page.close()
+                            except Exception:
+                                pass
+                            had_captcha = True
+                            continue
                         try:
                             page.wait_for_selector(
                                 '[itemprop="price"], [data-price], .a-price, [class*="price"]',
@@ -5414,27 +5411,17 @@ def _scrape_with_chrome_cdp(
                     if issues["is_captcha"] or issues["is_blocked"]:
                         issue_type = "CAPTCHA" if issues["is_captcha"] else "blocked"
                         logger.warning(
-                            "CDP %s detected on attempt %d for %s - bailing immediately and setting cooldown",
+                            "CDP %s detected on attempt %d for %s - retrying with new IP",
                             issue_type,
                             attempt + 1,
                             url,
                         )
-                        _mark_domain_captcha_blocked(scraped_domain)
                         try:
                             page.close()
                         except Exception:
                             pass
-                        return {
-                            "status": "captcha_blocked",
-                            "error": (
-                                f"CAPTCHA protection detected on {scraped_domain}. "
-                                f"Use the browser extension to check this price. "
-                                f"CDP will retry automatically in {int(CAPTCHA_COOLDOWN_SECONDS // 60)} minutes."
-                            ),
-                            "domain": scraped_domain,
-                            "cooldown_remaining": CAPTCHA_COOLDOWN_SECONDS,
-                            "source": "chrome_cdp",
-                        }
+                        had_captcha = True
+                        continue
 
                     content_loaded = _wait_for_real_content(page, timeout_seconds=15)
                     if not content_loaded:
@@ -5548,9 +5535,19 @@ def _scrape_with_chrome_cdp(
             except Exception as exc:
                 logger.debug("Failed to close shared CDP context: %s", exc)
 
-        if not had_real_content:
+        if not had_real_content and not had_captcha:
             # CDP is reachable but not yielding usable pages right now; avoid raising UI_CHANGED.
             _mark_cdp_unhealthy(45.0)
+        if had_captcha:
+            return {
+                "status": "captcha_blocked",
+                "error": (
+                    f"CAPTCHA detected on {scraped_domain} after {max_attempts} attempts. "
+                    f"Trying next proxy or will retry later."
+                ),
+                "domain": scraped_domain,
+                "source": "chrome_cdp",
+            }
         return None
 
     except Exception as exc:
@@ -6044,6 +6041,26 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
         logger.info("tier_skip tier=extension reason=unavailable domain=%s user=%s", scraped_hostname, caller_user_id)
 
     # Tier 4: Remote Chrome container via CDP (with on-demand ACI start)
+    if _is_domain_captcha_blocked(scraped_hostname):
+        remaining = _get_captcha_cooldown_remaining(scraped_hostname)
+        logger.info(
+            "tier_skip tier=chrome_cdp reason=captcha_cooldown domain=%s user=%s remaining=%d",
+            scraped_hostname,
+            caller_user_id,
+            int(remaining),
+        )
+        return {
+            "status": "captcha_blocked",
+            "error": (
+                f"CAPTCHA protection detected on {scraped_hostname}. "
+                f"Use the browser extension to check this price. "
+                f"CDP will retry automatically in {int(remaining // 60)} minutes."
+            ),
+            "domain": scraped_hostname,
+            "cooldown_remaining": remaining,
+            "source": "chrome_cdp",
+        }
+
     cdp_healthy = _cdp_endpoint_healthy()
 
     if not cdp_healthy and ENABLE_ACI_AUTO_START and _AZURE_SDK_AVAILABLE and ACI_SUBSCRIPTION_ID:
@@ -6065,18 +6082,22 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
         logger.info("tier_fallback tier=chrome_cdp domain=%s user=%s", scraped_hostname, caller_user_id)
         proxy_list = _get_cdp_proxy_list()
         cdp_result = None
+        proxy_attempts = [3, 2, 1]
         try:
             for proxy_idx, proxy_cfg in enumerate(proxy_list):
                 proxy_label = "direct" if proxy_cfg is None else ("primary_proxy" if proxy_idx == 0 else "fallback_proxy")
                 is_last_proxy = proxy_idx == len(proxy_list) - 1
+                attempts_for_this_proxy = proxy_attempts[proxy_idx] if proxy_idx < len(proxy_attempts) else 1
                 try:
-                    logger.info("CDP attempt with %s for domain=%s", proxy_label, scraped_hostname)
+                    logger.info("CDP attempt with %s (%d max attempts) for domain=%s", proxy_label, attempts_for_this_proxy, scraped_hostname)
                     cdp_result = _scrape_with_chrome_cdp(
                         product.url,
                         custom_selector=effective_selector,
                         original_price_selector=effective_original_selector,
                         resolved_cdp_endpoint=cached_cdp_endpoint,
                         proxy_config=proxy_cfg,
+                        skip_captcha_check=True,
+                        max_attempts_override=attempts_for_this_proxy,
                     )
                     if cdp_result is not None:
                         if cdp_result.get("price"):
@@ -6106,8 +6127,23 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                     continue
             if cdp_result:
                 if cdp_result.get("status") in ("bot_blocked", "captcha_blocked"):
-                    logger.info("scrape_%s tier=%s domain=%s", cdp_result["status"], "chrome_cdp", scraped_hostname)
-                    return cdp_result
+                    _mark_domain_captcha_blocked(scraped_hostname)
+                    logger.info(
+                        "scrape_%s tier=%s domain=%s — all proxies failed, cooldown set for %d seconds",
+                        cdp_result["status"], "chrome_cdp", scraped_hostname, int(CAPTCHA_COOLDOWN_SECONDS),
+                    )
+                    return {
+                        "status": "captcha_blocked",
+                        "error": (
+                            f"CAPTCHA protection detected on {scraped_hostname}. "
+                            f"All proxy attempts exhausted. "
+                            f"Use the browser extension to check this price. "
+                            f"CDP will retry automatically in {int(CAPTCHA_COOLDOWN_SECONDS // 60)} minutes."
+                        ),
+                        "domain": scraped_hostname,
+                        "cooldown_remaining": CAPTCHA_COOLDOWN_SECONDS,
+                        "source": "chrome_cdp",
+                    }
                 if not cdp_result.get("selector_worked") and effective_selector:
                     logger.warning(
                         "scrape_selector_drift tier=chrome_cdp domain=%s user=%s — selector failed, fallback found price",
@@ -7090,5 +7126,3 @@ def get_history_by_url(
     except SQLAlchemyError as exc:
         logger.exception("Failed to fetch URL history: %s", exc)
         return []
-
-
