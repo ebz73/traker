@@ -12,6 +12,7 @@ passlib[bcrypt]
 bcrypt==4.0.1
 python-multipart
 playwright
+playwright-stealth
 azure-identity
 azure-mgmt-containerinstance
 curl_cffi

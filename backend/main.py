@@ -76,6 +76,8 @@ from sqlalchemy.orm import Session, declarative_base, sessionmaker
 #   python-jose[cryptography]
 #   passlib[bcrypt]
 
+_US_TIMEZONES = ["America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles"]
+
 # --- SITE SPECIFIC CONFIGURATION ---
 SITE_SELECTORS = {
     # ── Original sites (improved) ─────────────────────────────────────────────
@@ -171,6 +173,217 @@ except ImportError:
         apply_stealth = _stealth_sync
     except ImportError:
         pass
+
+
+def _inject_manual_stealth(page) -> None:
+    """Inject essential anti-detection patches that playwright_stealth might miss."""
+    try:
+        page.add_init_script("""
+            // Hide webdriver flag
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+
+            // Fake plugins (headless Chrome has 0 plugins)
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [
+                    { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
+                    { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
+                    { name: 'Native Client', filename: 'internal-nacl-plugin' },
+                ],
+            });
+
+            // Fake languages
+            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+
+            // Consistent platform (must match User-Agent)
+            Object.defineProperty(navigator, 'platform', { get: () => 'Linux x86_64' });
+
+            // Hide automation indicators
+            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Array;
+            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;
+            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
+
+            // Fake chrome.runtime (missing in headless)
+            if (!window.chrome) window.chrome = {};
+            if (!window.chrome.runtime) window.chrome.runtime = { id: undefined };
+
+            // Override permissions query
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) => (
+                parameters.name === 'notifications' ?
+                    Promise.resolve({ state: Notification.permission }) :
+                    originalQuery(parameters)
+            );
+
+            // Fix iframe contentWindow
+            const originalContentWindow = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentWindow');
+            Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {
+                get: function() {
+                    const result = originalContentWindow.get.call(this);
+                    if (result) {
+                        try {
+                            Object.defineProperty(result.navigator, 'webdriver', { get: () => undefined });
+                        } catch(e) {}
+                    }
+                    return result;
+                }
+            });
+
+            // Fix screen dimensions (headless reports wrong values)
+            Object.defineProperty(screen, 'width', { get: () => 1920 });
+            Object.defineProperty(screen, 'height', { get: () => 1080 });
+            Object.defineProperty(screen, 'availWidth', { get: () => 1920 });
+            Object.defineProperty(screen, 'availHeight', { get: () => 1040 });
+            Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
+            Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
+
+            // Fix window outer dimensions (headless reports 0)
+            if (window.outerWidth === 0) {
+                Object.defineProperty(window, 'outerWidth', { get: () => 1920 });
+                Object.defineProperty(window, 'outerHeight', { get: () => 1040 });
+            }
+
+            // Consistent hardware concurrency (headless sometimes reports wrong)
+            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+
+            // Consistent device memory
+            Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+
+            // Fix WebGL vendor/renderer (headless reports "Google Inc. (Google)" which is a known headless tell)
+            const getParameterProxyHandler = {
+                apply: function(target, thisArg, args) {
+                    const param = args[0];
+                    const UNMASKED_VENDOR_WEBGL = 0x9245;
+                    const UNMASKED_RENDERER_WEBGL = 0x9246;
+                    if (param === UNMASKED_VENDOR_WEBGL) return 'Google Inc. (NVIDIA)';
+                    if (param === UNMASKED_RENDERER_WEBGL) return 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1650 Direct3D11 vs_5_0 ps_5_0, D3D11)';
+                    return target.apply(thisArg, args);
+                }
+            };
+            try {
+                const canvas = document.createElement('canvas');
+                const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+                if (gl) {
+                    const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+                    if (debugInfo) {
+                        WebGLRenderingContext.prototype.getParameter = new Proxy(
+                            WebGLRenderingContext.prototype.getParameter, getParameterProxyHandler
+                        );
+                    }
+                }
+                // Also patch WebGL2
+                const gl2 = canvas.getContext('webgl2');
+                if (gl2) {
+                    const debugInfo2 = gl2.getExtension('WEBGL_debug_renderer_info');
+                    if (debugInfo2) {
+                        WebGL2RenderingContext.prototype.getParameter = new Proxy(
+                            WebGL2RenderingContext.prototype.getParameter, getParameterProxyHandler
+                        );
+                    }
+                }
+            } catch(e) {}
+
+            // Connection type (headless has no connection info)
+            if (navigator.connection === undefined) {
+                Object.defineProperty(navigator, 'connection', {
+                    get: () => ({
+                        effectiveType: '4g',
+                        rtt: 50,
+                        downlink: 10,
+                        saveData: false,
+                    })
+                });
+            }
+
+            // Battery API (return realistic values)
+            if (!navigator.getBattery) {
+                navigator.getBattery = () => Promise.resolve({
+                    charging: true,
+                    chargingTime: 0,
+                    dischargingTime: Infinity,
+                    level: 0.97,
+                    addEventListener: () => {},
+                    removeEventListener: () => {},
+                });
+            }
+
+            // Add subtle noise to canvas fingerprinting
+            const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
+            HTMLCanvasElement.prototype.toDataURL = function(type) {
+                if (this.width === 0 || this.height === 0) return originalToDataURL.apply(this, arguments);
+                const ctx = this.getContext('2d');
+                if (ctx) {
+                    // Add invisible noise pixel
+                    const imageData = ctx.getImageData(0, 0, 1, 1);
+                    imageData.data[3] = imageData.data[3] === 0 ? 0 : (imageData.data[3] ^ 1);
+                    ctx.putImageData(imageData, 0, 0);
+                }
+                return originalToDataURL.apply(this, arguments);
+            };
+
+            const originalToBlob = HTMLCanvasElement.prototype.toBlob;
+            HTMLCanvasElement.prototype.toBlob = function(callback, type, quality) {
+                if (this.width === 0 || this.height === 0) return originalToBlob.apply(this, arguments);
+                const ctx = this.getContext('2d');
+                if (ctx) {
+                    const imageData = ctx.getImageData(0, 0, 1, 1);
+                    imageData.data[3] = imageData.data[3] === 0 ? 0 : (imageData.data[3] ^ 1);
+                    ctx.putImageData(imageData, 0, 0);
+                }
+                return originalToBlob.apply(this, arguments);
+            };
+
+            // chrome.loadTimes and chrome.csi — present in real Chrome, missing in headless
+            if (window.chrome) {
+                if (!window.chrome.loadTimes) {
+                    window.chrome.loadTimes = function() {
+                        return {
+                            commitLoadTime: Date.now() / 1000 - 0.3,
+                            connectionInfo: 'h2',
+                            finishDocumentLoadTime: Date.now() / 1000 - 0.1,
+                            finishLoadTime: Date.now() / 1000,
+                            firstPaintAfterLoadTime: Date.now() / 1000 + 0.05,
+                            firstPaintTime: Date.now() / 1000 - 0.2,
+                            navigationType: 'Other',
+                            npnNegotiatedProtocol: 'h2',
+                            requestTime: Date.now() / 1000 - 0.5,
+                            startLoadTime: Date.now() / 1000 - 0.4,
+                            wasAlternateProtocolAvailable: false,
+                            wasFetchedViaSpdy: true,
+                            wasNpnNegotiated: true,
+                        };
+                    };
+                }
+                if (!window.chrome.csi) {
+                    window.chrome.csi = function() {
+                        return {
+                            onloadT: Date.now(),
+                            startE: Date.now() - 500,
+                            pageT: 500 + Math.random() * 200,
+                            tran: 15,
+                        };
+                    };
+                }
+            }
+
+            // Notification.permission — headless returns 'default', real browsers vary
+            try {
+                Object.defineProperty(Notification, 'permission', {
+                    get: () => 'denied'
+                });
+            } catch(e) {}
+
+            // history.length — headless starts at 1, real browsers usually have more
+            try {
+                Object.defineProperty(window.history, 'length', { get: () => 3 + Math.floor(Math.random() * 5) });
+            } catch(e) {}
+
+            // maxTouchPoints — must be 0 for non-touch Linux desktop
+            try {
+                Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 });
+            } catch(e) {}
+        """)
+    except Exception as exc:
+        logger.debug("Manual stealth injection failed: %s", exc)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -581,16 +794,16 @@ CFFI_IMPERSONATIONS = ["chrome", "safari", "chrome131", "chrome124"]
 
 HTTP_FIRST_HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        "Mozilla/5.0 (X11; Linux x86_64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
     "Accept-Language": "en-US,en;q=0.9",
     "Accept-Encoding": "gzip, deflate, br",
     "Referer": "https://www.google.com/",
-    "sec-ch-ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+    "sec-ch-ua": '"Chromium";v="131", "Not_A Brand";v="24", "Google Chrome";v="131"',
     "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": '"macOS"',
+    "sec-ch-ua-platform": '"Linux"',
     "Sec-Fetch-Dest": "document",
     "Sec-Fetch-Mode": "navigate",
     "Sec-Fetch-Site": "cross-site",
@@ -599,11 +812,10 @@ HTTP_FIRST_HEADERS = {
     "Cache-Control": "max-age=0",
 }
 USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edg/124.0.0.0 Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
 ]
 HTTP_FIRST_TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0)
 HTTP_FIRST_CLIENT_HTTP2 = httpx.Client(
@@ -5010,6 +5222,11 @@ def _handle_popups_and_overlays(page, url: str = "", max_passes: int = 4) -> int
 
 def handle_all_popups(page, url: str = "", is_recheck: bool = False) -> int:
     """Single entry point. Call after page load, and again after human simulation."""
+    try:
+        if page.is_closed():
+            return 0
+    except Exception:
+        return 0
     total = 0
     domain = _get_domain(url) if url else ""
     iframe_pass_done = False
@@ -5049,6 +5266,11 @@ def _detect_page_issues(page) -> Dict[str, bool]:
     Detect CAPTCHA/block signals using DOM element checks and visible text.
     Never scans raw HTML - that causes false positives from CDN URLs and script tags.
     """
+    try:
+        if page.is_closed():
+            return {"is_captcha": False, "is_blocked": False}
+    except Exception:
+        return {"is_captcha": False, "is_blocked": False}
     try:
         result = page.evaluate(
             """() => {
@@ -5211,6 +5433,11 @@ def _simulate_human_behavior(page, duration_seconds: float = 2.0) -> None:
 
 
 def _wait_for_real_content(page, timeout_seconds: int = 15) -> bool:
+    try:
+        if page.is_closed():
+            return False
+    except Exception:
+        return False
     # Primary check: reasonable amount of text content
     try:
         page.wait_for_function(
@@ -5334,6 +5561,7 @@ def _scrape_with_chrome_cdp(
                 _context_kwargs = dict(
                     viewport={"width": 1280, "height": 800},
                     locale="en-US",
+                    timezone_id=random.choice(_US_TIMEZONES),
                     java_script_enabled=True,
                     user_agent=random.choice(USER_AGENTS),
                 )
@@ -5354,6 +5582,7 @@ def _scrape_with_chrome_cdp(
                         _context_kwargs = dict(
                             viewport={"width": 1280, "height": 800},
                             locale="en-US",
+                            timezone_id=random.choice(_US_TIMEZONES),
                             java_script_enabled=True,
                             user_agent=random.choice(USER_AGENTS),
                         )
@@ -5370,9 +5599,11 @@ def _scrape_with_chrome_cdp(
                     page = context.new_page()
                     page.on("dialog", lambda dialog: dialog.dismiss())
                     apply_stealth(page)
+                    _inject_manual_stealth(page)
                     inject_popup_prevention(page)
                     try:
-                        response = page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                        wait_strategy = "networkidle" if proxy_config else "domcontentloaded"
+                        response = page.goto(url, wait_until=wait_strategy, timeout=90000)
                         if response and response.status in PERMANENT_ERROR_CODES:
                             logger.warning(
                                 "CDP page returned HTTP %d for %s on attempt %d — skipping",
@@ -5400,6 +5631,14 @@ def _scrape_with_chrome_cdp(
                         continue
 
                     _anti_bot_sleep(0.3, 0.8)
+
+                    # Check if page is still alive after anti-bot sleep
+                    try:
+                        if page.is_closed():
+                            logger.warning("CDP page closed during anti-bot sleep for %s on attempt %d", url, attempt + 1)
+                            continue
+                    except Exception:
+                        continue
 
                     if time.time() > wall_deadline:
                         logger.warning("CDP max wall time reached before popup handling for %s", url)
