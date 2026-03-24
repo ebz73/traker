@@ -7066,3 +7066,4 @@ def get_history_by_url(
     except SQLAlchemyError as exc:
         logger.exception("Failed to fetch URL history: %s", exc)
         return []
+
