@@ -7067,3 +7067,4 @@ def get_history_by_url(
         logger.exception("Failed to fetch URL history: %s", exc)
         return []
 
+
