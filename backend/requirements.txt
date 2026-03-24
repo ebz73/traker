@@ -16,3 +16,4 @@ azure-identity
 azure-mgmt-containerinstance
 curl_cffi==0.13.0
 resend
+# Resend email integration
