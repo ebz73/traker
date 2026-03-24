@@ -577,7 +577,7 @@ PERMANENT_ERROR_CODES = {400, 401, 403, 404, 410}
 ENABLE_TIER_1_HTTP = True   # httpx HTTP-first scraper
 ENABLE_TIER_2_CFFI = os.getenv("ENABLE_TIER_2_CFFI", "true").lower() in ("true", "1", "yes")   # curl_cffi TLS-impersonation scraper
 ENABLE_TIER_3_EXTENSION = True  # Extension-based scraping via job queue
-CFFI_IMPERSONATIONS = ["chrome124", "chrome120", "safari17_0", "chrome116"]
+CFFI_IMPERSONATIONS = ["chrome", "safari", "chrome131", "chrome124"]
 
 HTTP_FIRST_HEADERS = {
     "User-Agent": (
@@ -5850,101 +5850,125 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
 
     # Tier 2: curl_cffi with Chrome TLS impersonation (fast, no browser)
     if ENABLE_TIER_2_CFFI and cffi_requests:
+        cffi_headers = {
+            "Referer": "https://www.google.com/",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "cross-site",
+            "Sec-Fetch-User": "?1",
+            "Upgrade-Insecure-Requests": "1",
+            "Cache-Control": "max-age=0",
+        }
         cffi_max_attempts = 2
         cffi_retry_statuses = {429, 500, 502, 503, 504}
-        for attempt in range(cffi_max_attempts):
-            retryable_status_seen = False
-            successful_html: Optional[str] = None
-            successful_soup: Optional["BeautifulSoup"] = None
-            successful_title: str = "Unknown Product"
-            successful_site_name: Optional[str] = None
-            for profile in CFFI_IMPERSONATIONS:
-                try:
-                    cffi_resp = cffi_requests.get(
+        cffi_sessions: Dict[str, Any] = {}
+        try:
+            for attempt in range(cffi_max_attempts):
+                retryable_status_seen = False
+                successful_html: Optional[str] = None
+                successful_soup: Optional["BeautifulSoup"] = None
+                successful_title: str = "Unknown Product"
+                successful_site_name: Optional[str] = None
+                for profile in CFFI_IMPERSONATIONS:
+                    try:
+                        cffi_session = cffi_sessions.get(profile)
+                        if cffi_session is None:
+                            cffi_session = cffi_requests.Session()
+                            cffi_sessions[profile] = cffi_session
+
+                        cffi_resp = cffi_session.get(
+                            product.url,
+                            impersonate=profile,
+                            headers=cffi_headers,
+                            allow_redirects=True,
+                            timeout=30,
+                        )
+                    except Exception as exc:
+                        logger.warning("curl_cffi scrape failed (attempt=%d, profile=%s): %s", attempt + 1, profile, exc)
+                        continue
+
+                    status_code = cffi_resp.status_code
+                    if status_code >= 400:
+                        if status_code in cffi_retry_statuses:
+                            retryable_status_seen = True
+                        continue
+
+                    html = cffi_resp.text or ""
+                    if _looks_blocked_html(html):
+                        continue
+
+                    logger.info("curl_cffi succeeded with profile %s on attempt %d", profile, attempt + 1)
+                    successful_html = html
+                    successful_soup = BeautifulSoup(html, "lxml")
+                    successful_title = (successful_soup.title.get_text(strip=True) if successful_soup.title else "") or "Unknown Product"
+                    successful_site_name = _extract_site_name_from_soup(successful_soup, product.url)
+                    break
+
+                if successful_html is not None and successful_soup is not None:
+                    extracted_prices = _extract_prices_from_html(
+                        successful_html,
                         product.url,
-                        impersonate=profile,
-                        allow_redirects=True,
-                        timeout=30,
-                    )
-                except Exception as exc:
-                    logger.warning("curl_cffi scrape failed (attempt=%d, profile=%s): %s", attempt + 1, profile, exc)
-                    continue
-
-                status_code = cffi_resp.status_code
-                if status_code >= 400:
-                    if status_code in cffi_retry_statuses:
-                        retryable_status_seen = True
-                    continue
-
-                html = cffi_resp.text or ""
-                if _looks_blocked_html(html):
-                    continue
-
-                logger.info("curl_cffi succeeded with profile %s on attempt %d", profile, attempt + 1)
-                successful_html = html
-                successful_soup = BeautifulSoup(html, "lxml")
-                successful_title = (successful_soup.title.get_text(strip=True) if successful_soup.title else "") or "Unknown Product"
-                successful_site_name = _extract_site_name_from_soup(successful_soup, product.url)
-                break
-
-            if successful_html is not None and successful_soup is not None:
-                extracted_prices = _extract_prices_from_html(
-                    successful_html,
-                    product.url,
-                    custom_selector=effective_selector,
-                    original_price_selector=effective_original_selector,
-                    soup=successful_soup,
-                )
-                price = extracted_prices.get("price")
-                if not extracted_prices.get("selector_worked") and extracted_prices.get("price") is not None and effective_selector:
-                    logger.warning(
-                        "scrape_selector_drift tier=curl_cffi domain=%s user=%s — selector failed, fallback found price",
-                        scraped_hostname, caller_user_id,
-                    )
-                if price is not None:
-                    original_price = extracted_prices.get("original_price")
-                    currency_code = _extract_currency_code_from_soup(successful_soup, product.url)
-                    _save_price_history(
-                        product_name=successful_title,
-                        url=product.url,
-                        price=price,
-                        original_price=original_price,
-                        currency_code=currency_code,
                         custom_selector=effective_selector,
                         original_price_selector=effective_original_selector,
-                        ui_changed=False,
-                        user_id=caller_user_id,
+                        soup=successful_soup,
                     )
-                    _update_tracked_product_price(
+                    price = extracted_prices.get("price")
+                    if not extracted_prices.get("selector_worked") and extracted_prices.get("price") is not None and effective_selector:
+                        logger.warning(
+                            "scrape_selector_drift tier=curl_cffi domain=%s user=%s — selector failed, fallback found price",
+                            scraped_hostname, caller_user_id,
+                        )
+                    if price is not None:
+                        original_price = extracted_prices.get("original_price")
+                        currency_code = _extract_currency_code_from_soup(successful_soup, product.url)
+                        _save_price_history(
+                            product_name=successful_title,
+                            url=product.url,
+                            price=price,
+                            original_price=original_price,
+                            currency_code=currency_code,
+                            custom_selector=effective_selector,
+                            original_price_selector=effective_original_selector,
+                            ui_changed=False,
+                            user_id=caller_user_id,
+                        )
+                        _update_tracked_product_price(
+                            product.url,
+                            price,
+                            original_price,
+                            successful_title,
+                            currency_code=currency_code,
+                            user_id=caller_user_id,
+                            site_name=successful_site_name,
+                        )
+                        logger.info("scrape_success tier=curl_cffi domain=%s user=%s", scraped_hostname, caller_user_id)
+                        return _build_scrape_response(
+                            successful_title,
+                            price,
+                            currency_code,
+                            effective_selector,
+                            "curl_cffi",
+                            original_price=original_price,
+                            original_price_selector=effective_original_selector,
+                            site_name=successful_site_name,
+                        )
+                    logger.info(
+                        "curl_cffi fetched HTML successfully but failed to extract a price for %s",
                         product.url,
-                        price,
-                        original_price,
-                        successful_title,
-                        currency_code=currency_code,
-                        user_id=caller_user_id,
-                        site_name=successful_site_name,
                     )
-                    logger.info("scrape_success tier=curl_cffi domain=%s user=%s", scraped_hostname, caller_user_id)
-                    return _build_scrape_response(
-                        successful_title,
-                        price,
-                        currency_code,
-                        effective_selector,
-                        "curl_cffi",
-                        original_price=original_price,
-                        original_price_selector=effective_original_selector,
-                        site_name=successful_site_name,
-                    )
-                logger.info(
-                    "curl_cffi fetched HTML successfully but failed to extract a price for %s",
-                    product.url,
-                )
-                break
+                    break
 
-            if retryable_status_seen and attempt < cffi_max_attempts - 1:
-                _retry_sleep(attempt)
-                continue
-            break
+                if retryable_status_seen and attempt < cffi_max_attempts - 1:
+                    _retry_sleep(attempt)
+                    continue
+                break
+        finally:
+            for cffi_session in cffi_sessions.values():
+                try:
+                    cffi_session.close()
+                except Exception:
+                    pass
     else:
         logger.info("tier_skip tier=curl_cffi reason=disabled domain=%s user=%s", scraped_hostname, caller_user_id)
 
@@ -7066,7 +7090,5 @@ def get_history_by_url(
     except SQLAlchemyError as exc:
         logger.exception("Failed to fetch URL history: %s", exc)
         return []
-
-
 
 
