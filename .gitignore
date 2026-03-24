@@ -21,3 +21,12 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# Local testing extension (localhost version)
+extension/
+
+# Old Docker/local dev files
+chrome-container/
+docker-compose.yml
+build.sh
+.env.example
