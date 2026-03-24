@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TRAKER</title>
+  <style>
+    :root {
+      /* Backgrounds - matched to web app */
+      --popup-bg: #dbe3f1;
+      --popup-header-start: #7056f6;
+      --popup-header-end: #5636ef;
+      --popup-section-border: #cad6e8;
+      --popup-item-bg: #ffffff;
+      --popup-item-border: #cad6e8;
+      --popup-input-bg: #ffffff;
+      --popup-input-border: #bfcde1;
+      --popup-settings-border: #dce5f3;
+
+      /* Text */
+      --popup-text: #22314a;
+      --popup-text-secondary: #5e708d;
+      --popup-text-muted: #8a99b2;
+      --popup-text-meta: #8a99b2;
+      --popup-label: #5e708d;
+      --popup-section-title: #22314a;
+
+      /* Brand/Semantic */
+      --popup-accent: #6c3ff5;
+      --popup-price: #cc0000;
+      --popup-error: #c62828;
+      --popup-success-bg: #e8f5e9;
+      --popup-success-text: #2e7d32;
+      --popup-error-bg: #fce4e4;
+      --popup-error-text: #c62828;
+      --popup-info-bg: #e3f2fd;
+      --popup-info-text: #1565c0;
+      --popup-pct-off-bg: #e8f5e9;
+      --popup-pct-off-text: #2e7d32;
+      --popup-trend-down: #2e7d32;
+      --popup-trend-up: #c62828;
+
+      /* Buttons */
+      --popup-btn-primary-start: #cc0000;
+      --popup-btn-primary-end: #d91a1a;
+      --popup-btn-secondary-bg: #f4f4f8;
+      --popup-btn-secondary-text: #22314a;
+      --popup-btn-remove: #bbb;
+      --popup-btn-remove-hover: #cc0000;
+
+      /* Badge */
+      --popup-badge-bg: #cc0000;
+      --popup-badge-text: #fff;
+
+      /* Settings */
+      --popup-settings-summary: #5e708d;
+      --popup-settings-arrow: #8a99b2;
+      --popup-setting-label: #5e708d;
+      --popup-setting-input-bg: #ffffff;
+
+      /* Extra popup tokens */
+      --popup-header-text: #fff;
+      --popup-logo-start: #4554ec;
+      --popup-logo-end: #8f1fff;
+      --popup-logo-text: #fff;
+      --popup-btn-primary-text: #fff;
+      --popup-theme-hover-bg: rgba(255, 255, 255, 0.15);
+
+      color-scheme: light;
+    }
+
+    [data-theme="dark"] {
+      /* Backgrounds - matched to web app */
+      --popup-bg: #0f1117;
+      --popup-header-start: #4520c8;
+      --popup-header-end: #3818a8;
+      --popup-section-border: #2d3344;
+      --popup-item-bg: #11131a;
+      --popup-item-border: #2d3344;
+      --popup-input-bg: #161922;
+      --popup-input-border: #2d3344;
+      --popup-settings-border: #2d3344;
+
+      /* Text */
+      --popup-text: #e4e8f0;
+      --popup-text-secondary: #8a99b2;
+      --popup-text-muted: #6b7a92;
+      --popup-text-meta: #6b7a92;
+      --popup-label: #8a99b2;
+      --popup-section-title: #d0d8e8;
+
+      /* Brand/Semantic */
+      --popup-accent: #8b6cf7;
+      --popup-price: #ef5350;
+      --popup-error: #ef5350;
+      --popup-success-bg: #162216;
+      --popup-success-text: #66bb6a;
+      --popup-error-bg: #2e1a1a;
+      --popup-error-text: #ef5350;
+      --popup-info-bg: #1a2240;
+      --popup-info-text: #64b5f6;
+      --popup-pct-off-bg: #1a2e1a;
+      --popup-pct-off-text: #66bb6a;
+      --popup-trend-down: #66bb6a;
+      --popup-trend-up: #ef5350;
+
+      /* Buttons */
+      --popup-btn-primary-start: #d32f2f;
+      --popup-btn-primary-end: #c62828;
+      --popup-btn-secondary-bg: #2d3344;
+      --popup-btn-secondary-text: #e4e8f0;
+      --popup-btn-remove: #5a6880;
+      --popup-btn-remove-hover: #ef5350;
+
+      /* Badge */
+      --popup-badge-bg: #d32f2f;
+      --popup-badge-text: #fff;
+
+      /* Settings */
+      --popup-settings-summary: #8a99b2;
+      --popup-settings-arrow: #6b7a92;
+      --popup-setting-label: #6b7a92;
+      --popup-setting-input-bg: #161922;
+
+      /* Extra popup tokens */
+      --popup-header-text: #fff;
+      --popup-logo-start: #4554ec;
+      --popup-logo-end: #8f1fff;
+      --popup-logo-text: #fff;
+      --popup-btn-primary-text: #fff;
+      --popup-theme-hover-bg: rgba(255, 255, 255, 0.15);
+
+      color-scheme: dark;
+    }
+
+    [data-theme="dark"] .btn-login {
+      background: linear-gradient(90deg, #7c5cf5, #6c3ff5);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :focus-visible {
+      outline: 1.3px solid var(--popup-accent);
+      outline-offset: 0.3px;
+    }
+
+    :focus:not(:focus-visible) {
+      outline: none;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 13px;
+      color: var(--popup-text);
+      background: var(--popup-bg);
+      width: 350px;
+      min-height: 100px;
+    }
+
+    header {
+      background: linear-gradient(135deg, var(--popup-header-start), var(--popup-header-end));
+      color: var(--popup-header-text);
+      padding: 12px 16px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .lp-logoBox {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      background: linear-gradient(160deg, var(--popup-logo-start), var(--popup-logo-end));
+      color: var(--popup-logo-text);
+      display: grid;
+      place-items: center;
+      font-size: 24px;
+      font-weight: 700;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+
+    header h1 {
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+    }
+
+    .profile-wrap {
+      margin-left: auto;
+      position: relative;
+    }
+
+    .btn-profile {
+      background: none;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-radius: 50%;
+      width: 34px;
+      height: 34px;
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+      padding: 0;
+      transition: border-color 0.15s;
+    }
+
+    .btn-profile:hover {
+      border-color: rgba(255,255,255,0.6);
+    }
+
+    .profile-avatar-container {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      overflow: hidden;
+    }
+
+    .section {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--popup-section-border);
+    }
+
+    .section:last-child { border-bottom: none; }
+
+    label {
+      display: block;
+      font-weight: 600;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--popup-label);
+      margin-bottom: 6px;
+    }
+
+    input[type="text"],
+    input[type="password"],
+    input[type="email"] {
+      width: 100%;
+      padding: 7px 10px;
+      border: 1px solid var(--popup-input-border);
+      border-radius: 6px;
+      font-size: 12px;
+      color: var(--popup-text);
+      background: var(--popup-input-bg);
+      transition: border-color 0.15s, background 0.15s, color 0.15s;
+    }
+
+    input[type="text"]:focus,
+    input[type="password"]:focus,
+    input[type="email"]:focus { border-color: var(--popup-accent); }
+
+    .field {
+      display: grid;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+
+    .field:last-child {
+      margin-bottom: 0;
+    }
+
+    #auth-logged-out {
+      display: grid;
+      gap: 8px;
+    }
+
+    .profile-dropdown {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      width: 220px;
+      background: var(--popup-item-bg);
+      border: 1px solid var(--popup-item-border);
+      border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+      z-index: 1000;
+      padding: 6px 0;
+      animation: profileFadeIn 0.12s ease;
+    }
+
+    @keyframes profileFadeIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .profile-dropdown-email {
+      padding: 10px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--popup-text-secondary);
+      word-break: break-all;
+    }
+
+    .profile-dropdown-divider {
+      height: 1px;
+      background: var(--popup-section-border);
+      margin: 2px 0;
+    }
+
+    .profile-dropdown-label {
+      padding: 6px 14px 2px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--popup-text-muted);
+    }
+
+    .avatar-picker {
+      display: flex;
+      gap: 8px;
+      padding: 6px 14px 8px;
+    }
+
+    .avatar-picker-btn {
+      background: none;
+      border: 2px solid transparent;
+      border-radius: 50%;
+      padding: 2px;
+      cursor: pointer;
+      transition: border-color 0.12s, transform 0.12s;
+      display: grid;
+      place-items: center;
+    }
+
+    .avatar-picker-btn:hover {
+      border-color: var(--popup-accent);
+      transform: scale(1.08);
+    }
+
+    .avatar-picker-btn.active {
+      border-color: var(--popup-accent);
+    }
+
+    .profile-dropdown-item {
+      display: block;
+      width: 100%;
+      text-align: left;
+      padding: 9px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--popup-text);
+      background: none;
+      border: none;
+      cursor: pointer;
+      transition: background 0.12s;
+    }
+
+    .profile-dropdown-item:hover {
+      background: var(--popup-btn-secondary-bg);
+    }
+
+    .profile-dropdown-delete {
+      color: var(--popup-text-muted);
+    }
+
+    .profile-dropdown-delete:hover {
+      color: var(--popup-error);
+      background: var(--popup-error-bg);
+    }
+
+    .profile-dropdown-logout {
+      color: var(--popup-error);
+    }
+
+    .profile-dropdown-logout:hover {
+      background: var(--popup-error-bg);
+    }
+
+    .err {
+      color: var(--popup-error);
+      font-size: 11px;
+      min-height: 14px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 8px 14px;
+      border: none;
+      border-radius: 7px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.1s;
+      width: 100%;
+    }
+
+    .btn:active { transform: scale(0.98); }
+
+    .btn-primary {
+      background: linear-gradient(90deg, var(--popup-btn-primary-start), var(--popup-btn-primary-end));
+      color: var(--popup-btn-primary-text);
+    }
+
+    .btn-login {
+      background: linear-gradient(90deg, #6c3ff5, #5636ef);
+      color: #fff;
+    }
+
+    .btn-secondary {
+      background: var(--popup-btn-secondary-bg);
+      color: var(--popup-btn-secondary-text);
+    }
+
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    .btn-row .btn { flex: 1; }
+
+    #status {
+      font-size: 12px;
+      padding: 6px 10px;
+      border-radius: 6px;
+      margin-top: 8px;
+      display: none;
+    }
+
+    #status.ok {
+      background: var(--popup-success-bg);
+      color: var(--popup-success-text);
+      display: block;
+    }
+
+    #status.err {
+      background: var(--popup-error-bg);
+      color: var(--popup-error-text);
+      display: block;
+    }
+
+    #status.info {
+      background: var(--popup-info-bg);
+      color: var(--popup-info-text);
+      display: block;
+    }
+
+    .product-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 280px;
+      overflow-y: auto;
+    }
+
+    .product-item {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 10px;
+      background: var(--popup-item-bg);
+      border: 1px solid var(--popup-item-border);
+      border-radius: 8px;
+    }
+
+    .product-info { flex: 1; min-width: 0; }
+
+    .product-name {
+      font-weight: 600;
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--popup-text);
+    }
+
+    .product-price {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--popup-price);
+      margin-top: 2px;
+    }
+
+    .original-price {
+      text-decoration: line-through;
+      color: var(--popup-text-muted);
+      font-size: 12px;
+      font-weight: 500;
+      margin-left: 4px;
+    }
+
+    .pct-off {
+      display: inline-block;
+      background: var(--popup-pct-off-bg);
+      color: var(--popup-pct-off-text);
+      font-size: 10px;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 4px;
+      margin-left: 4px;
+      vertical-align: middle;
+    }
+
+    .trend {
+      font-size: 12px;
+      font-weight: 700;
+      margin-left: 2px;
+      vertical-align: middle;
+    }
+
+    .trend-down {
+      color: var(--popup-trend-down);
+    }
+
+    .trend-up {
+      color: var(--popup-trend-up);
+    }
+
+    .product-meta {
+      font-size: 10px;
+      color: var(--popup-text-meta);
+      margin-top: 2px;
+    }
+
+    .product-settings {
+      margin-top: 8px;
+      border-top: 1px solid var(--popup-settings-border);
+      padding-top: 6px;
+    }
+
+    .settings-summary {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--popup-settings-summary);
+      cursor: pointer;
+      user-select: none;
+      list-style: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .settings-summary::-webkit-details-marker { display: none; }
+    .settings-summary::after { content: "▾"; font-size: 10px; color: var(--popup-settings-arrow); }
+    .product-settings[open] .settings-summary::after { content: "▴"; }
+
+    .settings-grid {
+      margin-top: 8px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .setting-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .setting-label {
+      margin-bottom: 0;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      color: var(--popup-setting-label);
+    }
+
+    .setting-input {
+      width: 100%;
+      padding: 6px 8px;
+      border: 1px solid var(--popup-input-border);
+      border-radius: 6px;
+      font-size: 12px;
+      color: var(--popup-text);
+      background: var(--popup-setting-input-bg);
+    }
+
+    .setting-input:focus { border-color: var(--popup-accent); }
+
+    .btn-remove {
+      background: none;
+      border: none;
+      color: var(--popup-btn-remove);
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 1;
+      padding: 0 2px;
+      flex-shrink: 0;
+      transition: color 0.15s;
+    }
+
+    .btn-remove:hover { color: var(--popup-btn-remove-hover); }
+
+    .empty-state {
+      text-align: center;
+      color: var(--popup-text-muted);
+      font-size: 12px;
+      padding: 12px 0;
+    }
+
+    .section-title {
+      font-weight: 700;
+      font-size: 12px;
+      color: var(--popup-section-title);
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .badge {
+      background: var(--popup-badge-bg);
+      color: var(--popup-badge-text);
+      border-radius: 10px;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 1px 6px;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="brand">
+      <div class="lp-logoBox">T</div>
+      <h1>TRAKER</h1>
+      <div id="profile-wrap" class="profile-wrap" style="display:none;">
+        <button id="btn-profile" class="btn-profile" aria-label="Profile menu" title="Profile">
+          <div id="profile-avatar" class="profile-avatar-container"></div>
+        </button>
+        <div id="profile-dropdown" class="profile-dropdown" style="display:none;">
+          <div id="profile-email" class="profile-dropdown-email"></div>
+          <div class="profile-dropdown-divider"></div>
+          <div class="profile-dropdown-label">Choose Avatar</div>
+          <div id="avatar-picker" class="avatar-picker">
+            <!-- Populated by JS -->
+          </div>
+          <div class="profile-dropdown-divider"></div>
+          <button id="btn-theme" class="profile-dropdown-item" type="button">🌙 Dark Mode</button>
+          <div class="profile-dropdown-divider"></div>
+          <button id="btn-delete-account" class="profile-dropdown-item profile-dropdown-delete" type="button">Delete Account</button>
+          <button id="btn-logout" class="profile-dropdown-item profile-dropdown-logout" type="button">Log Out</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="section" id="auth-section">
+    <div id="auth-logged-out" style="display:none;">
+      <div class="field">
+        <label for="auth-email">Email</label>
+        <input id="auth-email" type="email" placeholder="Email" autocomplete="email" />
+      </div>
+      <div class="field">
+        <label for="auth-password">Password</label>
+        <input id="auth-password" type="password" placeholder="Password" autocomplete="current-password" />
+      </div>
+      <button class="btn btn-login" id="btn-login">Log In</button>
+      <div id="auth-error" class="err" role="alert" aria-live="polite"></div>
+    </div>
+  </div>
+
+  <div id="authed-content" style="display:none;">
+    <div class="section">
+      <div class="btn-row">
+        <button class="btn btn-primary" id="btn-pick" aria-label="Pick price element on current page">&#9654; Pick Price Element</button>
+        <button class="btn btn-secondary" id="btn-check" aria-label="Check all tracked product prices">&#8635; Check All</button>
+      </div>
+      <div id="status" role="status" aria-live="polite"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">
+        <span>Tracked Products</span>
+        <span class="badge" id="product-count">0</span>
+      </div>
+      <ul class="product-list" id="product-list" role="list" aria-label="Tracked products">
+        <li class="empty-state">No products tracked yet.</li>
+      </ul>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="shared/api-utils.js"></script>
+  <script src="popup-avatar.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

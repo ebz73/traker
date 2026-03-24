@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <script>
+      (function() {
+        var theme = localStorage.getItem('traker_theme');
+        if (!theme) theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-theme', theme);
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute('content', theme === 'dark' ? '#0f1117' : '#6c3ff5');
+      })();
+    </script>
+    <link rel="icon" type="image/svg+xml" href="/icons/icon-192.svg" />
+
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+
+    <!-- PWA Manifest (Chrome, Edge, Firefox, Samsung Internet, Opera) -->
+    <link rel="manifest" href="/manifest.json" />
+
+    <!-- Theme color — colors Android status bar, Firefox toolbar, Chrome toolbar -->
+    <meta name="theme-color" content="#6c3ff5" />
+
+    <!-- Firefox-specific: allow installing as a PWA and set the theme -->
+    <meta name="msapplication-TileColor" content="#6c3ff5" />
+    <meta name="msapplication-navbutton-color" content="#6c3ff5" />
+
+    <!-- Apple-specific PWA meta tags (Safari ignores manifest for most PWA features) -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Traker" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.svg" />
+
+    <!-- General app meta -->
+    <meta name="application-name" content="Traker" />
+    <meta name="description" content="Track product prices and get notified when they drop" />
+    <meta name="mobile-web-app-capable" content="yes" />
+
+    <title>Traker - Price Tracker</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

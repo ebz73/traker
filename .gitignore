@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+backend/venv/
+backend/.env
+.env
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# Extension build artifacts
+traker-extension.zip
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

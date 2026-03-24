@@ -1,0 +1,101 @@
+.apa-wrap {
+  border-radius: 50%;
+  overflow: hidden;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.apa-body {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.apa-body--purple {
+  background: #efeef5;
+}
+
+.apa-body--black {
+  background: #efeef5;
+}
+
+.apa-body--orange {
+  background: #fff0e8;
+}
+
+.apa-body--yellow {
+  background: #fdf8e0;
+}
+
+.apa-bodyShape {
+  position: absolute;
+  bottom: calc(var(--apa-body-overhang, 0px) * -1);
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.apa-bodyShape--rect {
+  border-radius: 20% 20% 0 0;
+}
+
+.apa-bodyShape--dome {
+  border-radius: 50% 50% 0 0;
+}
+
+.apa-eyeRow {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+}
+
+.apa-eyeSocket {
+  display: grid;
+  place-items: center;
+  overflow: visible;
+}
+
+.apa-eyeball {
+  border-radius: 50%;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: height 120ms ease, border-radius 120ms ease;
+  overflow: hidden;
+}
+
+.apa-eyeball--blink {
+  border-radius: 2px !important;
+}
+
+.apa-pupil {
+  border-radius: 50%;
+  transition: transform 160ms ease-out, opacity 80ms ease;
+  will-change: transform;
+}
+
+.apa-dotEye {
+  border-radius: 50%;
+  transition: height 120ms ease, border-radius 120ms ease, transform 160ms ease-out;
+  will-change: transform;
+}
+
+.apa-dotEye--blink {
+  border-radius: 1px !important;
+}
+
+.apa-mouth {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  border-radius: 0 0 999px 999px;
+  z-index: 2;
+  box-sizing: border-box;
+}

@@ -1,0 +1,465 @@
+.loginPage {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  background: var(--bg);
+}
+
+.lp-leftPanel {
+  background: linear-gradient(135deg, var(--brand-gradient-start) 0%, var(--brand-gradient-mid) 50%, var(--brand-gradient-end) 100%);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 48px;
+  position: relative;
+  overflow: hidden;
+}
+
+.lp-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  position: relative;
+  z-index: 2;
+}
+
+.lp-logoBox {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: linear-gradient(160deg, var(--brand-logo-start), var(--brand-logo-end));
+  color: var(--on-brand);
+  display: grid;
+  place-items: center;
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.lp-brandText {
+  color: var(--on-brand);
+  font-size: 1.38rem;
+  letter-spacing: 0.5px;
+  font-weight: 700;
+}
+
+.lp-brandTextDark {
+  color: var(--ink);
+}
+
+.lp-stage {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  z-index: 2;
+  padding-bottom: 0;
+}
+
+.lp-characterGroup {
+  position: relative;
+  width: min(620px, 90%);
+  height: 520px;
+}
+
+.lp-confetti-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 10;
+}
+
+.lp-confetti-piece {
+  position: absolute;
+  top: -10px;
+  border-radius: 2px;
+  opacity: 0;
+  animation: lp-confetti-fall ease-out forwards;
+}
+
+@keyframes lp-bounce {
+  0%   { transform: translateY(0); }
+  6%   { transform: translateY(-60px); }
+  12%  { transform: translateY(0); }
+  17%  { transform: translateY(-50px); }
+  24%  { transform: translateY(0); }
+  30%  { transform: translateY(-38px); }
+  37%  { transform: translateY(0); }
+  43%  { transform: translateY(-26px); }
+  50%  { transform: translateY(0); }
+  56%  { transform: translateY(-16px); }
+  63%  { transform: translateY(0); }
+  69%  { transform: translateY(-8px); }
+  76%  { transform: translateY(0); }
+  82%  { transform: translateY(-3px); }
+  88%  { transform: translateY(0); }
+  100% { transform: translateY(0); }
+}
+
+@keyframes lp-droop {
+  0% { transform: translateY(0); }
+  40% { transform: translateY(8px); }
+  100% { transform: translateY(0); }
+}
+
+@keyframes lp-confetti-fall {
+  0% {
+    opacity: 1;
+    transform: translateY(0) translateX(0) rotate(0deg);
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(520px) translateX(var(--drift)) rotate(var(--rotation));
+  }
+}
+
+.lp-characterGroup.lp-emotionSuccess {
+  animation: lp-bounce 2200ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.lp-characterGroup.lp-emotionError {
+  animation: lp-droop 1200ms ease-in-out;
+}
+
+.lp-emotionError .lp-character {
+  transition-duration: 900ms;
+}
+
+.lp-character {
+  position: absolute;
+  bottom: 0;
+  transform-origin: bottom center;
+  transition: transform 700ms ease-in-out, height 700ms ease-in-out;
+  will-change: transform, height;
+}
+
+.lp-charPurple {
+  width: 220px;
+  height: 480px;
+  left: 80px;
+  z-index: 1;
+  background: var(--art-purple);
+  border-radius: 10px 10px 0 0;
+  box-shadow: inset 0 0 0 1px var(--art-outline-login);
+}
+
+.lp-charBlack {
+  width: 150px;
+  height: 380px;
+  left: 280px;
+  z-index: 2;
+  background: var(--art-black);
+  border-radius: 8px 8px 0 0;
+}
+
+.lp-charOrange {
+  width: 290px;
+  height: 240px;
+  left: 0;
+  z-index: 3;
+  background: var(--art-orange);
+  border-radius: 145px 145px 0 0;
+}
+
+.lp-charYellow {
+  width: 170px;
+  height: 280px;
+  left: 370px;
+  z-index: 4;
+  background: var(--art-yellow);
+  border-radius: 85px 85px 0 0;
+}
+
+.lp-eyeRow {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  transition: left 200ms ease-out, top 200ms ease-out, transform 200ms ease-out;
+}
+
+.lp-eyeRowPurple {
+  gap: 20px;
+}
+
+.lp-eyeRowBlack {
+  gap: 16px;
+}
+
+.lp-eyeRowOrange {
+  gap: 36px;
+}
+
+.lp-eyeRowYellow {
+  gap: 24px;
+}
+
+.lp-eyeball {
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  transition: height 120ms ease, border-radius 120ms ease;
+}
+
+.lp-eyeballBlink {
+  border-radius: 3px;
+}
+
+.lp-eyePupil {
+  border-radius: 999px;
+  transition: transform 180ms ease, opacity 80ms ease;
+}
+
+.lp-emotionSuccess .lp-eyeball {
+  transform: scale(1.25);
+}
+
+.lp-emotionSuccess .lp-pupil {
+  transform: scale(1.2);
+}
+
+.lp-emotionError .lp-eyeball {
+  transform: scale(0.9);
+}
+
+.lp-emotionError .lp-pupil {
+  transform: scale(0.9);
+}
+
+.lp-pupilSocket {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+}
+
+.lp-pupil {
+  border-radius: 999px;
+  transition: transform 180ms ease, height 120ms ease, border-radius 120ms ease;
+}
+
+.lp-pupilBlink {
+  border-radius: 2px;
+}
+
+.lp-mouth {
+  position: absolute;
+  left: 50%;
+  transform: translate(-50%, 0);
+  bottom: 68px;
+  width: 60px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--art-black);
+  transition: transform 200ms ease-out;
+}
+
+.lp-mouthOrange {
+  bottom: 42px;
+  width: 50px;
+}
+
+.lp-emotionSuccess .lp-mouth {
+  height: 8px;
+  border-radius: 0 0 999px 999px;
+  background: var(--art-black);
+}
+
+.lp-emotionError .lp-mouth {
+  height: 8px;
+  border-radius: 999px 999px 0 0;
+  background: var(--art-black);
+}
+
+.lp-rightPanel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: var(--purple-bg);
+}
+
+.lp-formWrap {
+  width: 100%;
+  max-width: 420px;
+  display: grid;
+  gap: 20px;
+}
+
+.lp-mobileBrand {
+  display: none;
+}
+
+.lp-heading {
+  margin: 0;
+  font-size: clamp(2rem, 3vw, 2.3rem);
+  line-height: 1.16;
+  color: var(--ink);
+}
+
+.lp-subtitle {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 1rem;
+}
+
+.lp-form {
+  display: grid;
+  gap: 16px;
+}
+
+.lp-field {
+  display: grid;
+  gap: 8px;
+}
+
+.lp-label {
+  font-size: 0.94rem;
+  font-weight: 600;
+  color: var(--muted-light);
+}
+
+.lp-passwordWrap {
+  position: relative;
+}
+
+.lp-input {
+  width: 100%;
+  height: 48px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--ink);
+  font-size: 1rem;
+  transition: border-color 0.15s;
+}
+
+.lp-input:focus {
+  border-color: var(--purple);
+}
+
+.lp-passwordInput {
+  padding-right: 48px;
+}
+
+.lp-passwordToggle {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.lp-passwordToggle:hover {
+  background: var(--bg-hover);
+}
+
+.lp-error {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--toast-error-border);
+  background: var(--toast-error-bg);
+  color: var(--toast-error-text);
+  font-size: 0.93rem;
+}
+
+.lp-submitBtn {
+  width: 100%;
+  height: 48px;
+  border: none;
+  border-radius: 8px;
+  background: var(--auth-submit-bg);
+  color: var(--auth-submit-text);
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.lp-submitBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.lp-toggleBtn {
+  margin-top: 2px;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--purple);
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lp-toggleBtn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+[data-theme="dark"] .lp-rightPanel {
+  background: var(--bg);
+}
+
+[data-theme="dark"] .lp-heading {
+  color: var(--ink);
+}
+
+[data-theme="dark"] .lp-subtitle {
+  color: var(--muted);
+}
+
+[data-theme="dark"] .lp-label {
+  color: var(--muted-light);
+}
+
+[data-theme="dark"] .lp-input {
+  background: var(--bg-input);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+[data-theme="dark"] .lp-error {
+  background: var(--toast-error-bg);
+  border-color: var(--toast-error-border);
+  color: var(--toast-error-text);
+}
+
+[data-theme="dark"] .lp-toggleBtn {
+  color: var(--purple);
+}
+
+@media (max-width: 1024px) {
+  .loginPage {
+    grid-template-columns: 1fr;
+  }
+
+  .lp-leftPanel {
+    display: none;
+  }
+
+  .lp-rightPanel {
+    padding: 24px;
+  }
+
+  .lp-mobileBrand {
+    display: inline-flex;
+  }
+}

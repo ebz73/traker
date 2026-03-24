@@ -1,0 +1,59 @@
+services:
+  db:
+    image: postgres:15
+    container_name: price_tracker_db
+    restart: always
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: pricetracker
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d pricetracker"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  chrome:
+    platform: linux/amd64
+    build: ./chrome-container
+    container_name: price_tracker_chrome
+    restart: always
+    shm_size: "2gb"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9223/json/version || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    volumes:
+      - chrome_profile:/home/chrome/chrome-profile
+    ports:
+      - "6080:6080"
+    expose:
+      - "9223"
+    # Port 9223 is intentionally NOT mapped to the host — backend reaches it
+    # over the internal Docker network only.
+
+  backend:
+    build: ./backend
+    container_name: price_tracker_backend
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://user:password@db:5432/pricetracker
+      CHROME_CDP_URL: http://chrome:9223
+      ANYIO_BACKEND_OPTIONS: '{"max_threads": 100}'
+    depends_on:
+      db:
+        condition: service_healthy
+      chrome:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  chrome_profile:
