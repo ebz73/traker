@@ -31,12 +31,9 @@ import os
 import random
 import re
 import secrets
-import smtplib
 import threading
 import time
 from contextlib import asynccontextmanager
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
@@ -53,6 +50,13 @@ try:
     _AZURE_SDK_AVAILABLE = True
 except ImportError:
     _AZURE_SDK_AVAILABLE = False
+
+# Resend email API
+try:
+    import resend
+    _RESEND_AVAILABLE = True
+except ImportError:
+    _RESEND_AVAILABLE = False
 
 from bs4 import BeautifulSoup
 from fastapi import Depends, FastAPI, HTTPException
@@ -464,16 +468,13 @@ def _touch_aci_idle_timer():
         logger.debug("ACI idle timer reset — will stop in %ds if no CDP requests", ACI_IDLE_TIMEOUT_SECONDS)
 
 # --- Email alert configuration ---
-# NOTE (Azure migration): Replace smtplib with Azure Communication Services Email SDK.
-# These env vars become Azure Key Vault secrets. The sending function changes;
-# the alert detection, queuing, and settings logic stays identical.
-SMTP_HOST = os.getenv("SMTP_HOST", "")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER = os.getenv("SMTP_USER", "")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
-SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", "alerts@traker.app")
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
+EMAIL_FROM = os.getenv("EMAIL_FROM", "onboarding@resend.dev")
 EMAIL_ALERTS_ENABLED = os.getenv("EMAIL_ALERTS_ENABLED", "true").lower() in ("true", "1", "yes")
 ALERT_DIGEST_INTERVAL_HOURS = int(os.getenv("ALERT_DIGEST_INTERVAL_HOURS", "6"))
+
+if _RESEND_AVAILABLE and RESEND_API_KEY:
+    resend.api_key = RESEND_API_KEY
 
 # Lightweight in-memory denylist for revoked refresh tokens.
 # Only needs to last until access tokens issued alongside them expire (ACCESS_TOKEN_MINUTES).
@@ -5659,30 +5660,28 @@ def _queue_price_alert(
 
 
 def _send_alert_email(to_emails: List[str], subject: str, html_body: str) -> bool:
-    """
-    Send an email via SMTP.
-    NOTE (Azure migration): Replace this function body with Azure Communication Services
-    Email SDK. The signature stays the same.
-    """
-    if not SMTP_HOST or not to_emails:
-        logger.info("Email send skipped: SMTP not configured or no recipients")
+    """Send an email via Resend API."""
+    if not _RESEND_AVAILABLE:
+        logger.warning("Email send skipped: resend package not installed")
+        return False
+    if not RESEND_API_KEY:
+        logger.info("Email send skipped: RESEND_API_KEY not configured")
+        return False
+    if not to_emails:
+        logger.info("Email send skipped: no recipients")
         return False
     try:
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"] = SMTP_FROM_EMAIL
-        msg["To"] = ", ".join(to_emails)
-        msg.attach(MIMEText(html_body, "html"))
-
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            server.starttls()
-            if SMTP_USER and SMTP_PASSWORD:
-                server.login(SMTP_USER, SMTP_PASSWORD)
-            server.sendmail(SMTP_FROM_EMAIL, to_emails, msg.as_string())
-        logger.info("alert_email_sent to=%s subject=%s", to_emails, subject[:60])
+        params = {
+            "from": EMAIL_FROM,
+            "to": to_emails,
+            "subject": subject,
+            "html": html_body,
+        }
+        r = resend.Emails.send(params)
+        logger.info("alert_email_sent via=resend to=%s subject=%s id=%s", to_emails, subject[:60], r.get("id"))
         return True
     except Exception as exc:
-        logger.warning("Failed to send alert email: %s", exc)
+        logger.warning("Failed to send alert email via Resend: %s", exc)
         return False
 
 
@@ -5727,7 +5726,7 @@ def _build_alert_digest_html(alerts: List[PriceAlert], user_email: str) -> str:
                     {table_rows}
                 </tbody>
             </table>
-            <a href="http://localhost:5173/?tab=droplist"
+            <a href="https://traker.azurewebsites.net/?tab=droplist"
                style="display:inline-block;background:#5636ef;color:#fff;padding:10px 24px;
                       border-radius:8px;text-decoration:none;font-weight:600;margin-top:8px;">
                 View Droplist
