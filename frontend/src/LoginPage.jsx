@@ -184,7 +184,10 @@ function LoginPage({
   const [isTyping, setIsTyping] = useState(false)
   const [purplePeek, setPurplePeek] = useState(false)
   const [emotion, setEmotion] = useState('idle')
+  const [isTransitioning, setIsTransitioning] = useState(false)
   const typingTimerRef = useRef(null)
+  const transitionSwapTimerRef = useRef(null)
+  const transitionEndTimerRef = useRef(null)
 
   const purpleRef = useRef(null)
   const blackRef = useRef(null)
@@ -205,6 +208,7 @@ function LoginPage({
   const passwordVisible = showPassword && loginPassword.trim().length > 0
   const purpleHiding = loginPassword.length > 0 && !showPassword
   const engagedExpression = purpleHiding || isTyping
+  const isLogin = authView === 'login'
 
   useEffect(() => {
     const onMouseMove = (event) => {
@@ -226,6 +230,8 @@ function LoginPage({
   useEffect(
     () => () => {
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current)
+      if (transitionSwapTimerRef.current) clearTimeout(transitionSwapTimerRef.current)
+      if (transitionEndTimerRef.current) clearTimeout(transitionEndTimerRef.current)
     },
     [],
   )
@@ -315,16 +321,30 @@ function LoginPage({
     if (authError) setAuthError('')
   }
 
-  const handleToggleAuthView = () => {
-    setAuthError('')
-    setAuthView((prev) => (prev === 'login' ? 'register' : 'login'))
+  const handleToggleMode = () => {
+    if (isTransitioning || authLoading) return
+
+    if (transitionSwapTimerRef.current) clearTimeout(transitionSwapTimerRef.current)
+    if (transitionEndTimerRef.current) clearTimeout(transitionEndTimerRef.current)
+
+    setIsTransitioning(true)
+    transitionSwapTimerRef.current = setTimeout(() => {
+      setAuthView((prev) => (prev === 'login' ? 'register' : 'login'))
+      setAuthError('')
+      transitionSwapTimerRef.current = null
+
+      transitionEndTimerRef.current = setTimeout(() => {
+        setIsTransitioning(false)
+        transitionEndTimerRef.current = null
+      }, 50)
+    }, 300)
   }
 
   const handleSubmit = async (event) => {
     event.preventDefault()
-    if (!loginEmail || !loginPassword || authLoading) return
+    if (!loginEmail || !loginPassword || authLoading || isTransitioning) return
 
-    if (authView === 'login') {
+    if (isLogin) {
       await handleLogin()
       return
     }
@@ -601,14 +621,14 @@ function LoginPage({
       </section>
 
       <section className="lp-rightPanel">
-        <div className="lp-formWrap">
+        <div className={`lp-formWrap ${isTransitioning ? 'lp-formFading' : ''}`}>
           <div className="lp-brand lp-mobileBrand">
             <div className="lp-logoBox">T</div>
             <div className="lp-brandText lp-brandTextDark">TRAKER</div>
           </div>
 
           <div>
-            <h1 className="lp-heading">{authView === 'login' ? 'Welcome back!' : 'Create account'}</h1>
+            <h1 className="lp-heading">{isLogin ? 'Welcome back!' : 'Create account'}</h1>
             <p className="lp-subtitle">Please enter your details</p>
           </div>
 
@@ -634,7 +654,7 @@ function LoginPage({
                   id="lp-password"
                   className="lp-input lp-passwordInput"
                   type={showPassword ? 'text' : 'password'}
-                  autoComplete={authView === 'login' ? 'current-password' : 'new-password'}
+                  autoComplete={isLogin ? 'current-password' : 'new-password'}
                   value={loginPassword}
                   onChange={handlePasswordChange}
                   placeholder="Password"
@@ -682,11 +702,16 @@ function LoginPage({
             {authError && <div className="lp-error">{authError}</div>}
 
             <button className="lp-submitBtn" type="submit" disabled={authLoading || !loginEmail || !loginPassword}>
-              {authLoading ? 'Please wait...' : authView === 'login' ? 'Log in' : 'Register'}
+              {authLoading ? 'Please wait...' : isLogin ? 'Log in' : 'Register'}
             </button>
 
-            <button className="lp-toggleBtn" type="button" onClick={handleToggleAuthView} disabled={authLoading}>
-              {authView === 'login' ? "Don't have an account? Sign Up" : 'Already have an account? Log in'}
+            <button className="lp-toggleBtn" type="button" onClick={handleToggleMode} disabled={authLoading || isTransitioning}>
+              <span className="lp-togglePrefix">
+                {isLogin ? "Don't have an account? " : 'Already have an account? '}
+              </span>
+              <span className="lp-toggleAction">
+                {isLogin ? 'Sign Up' : 'Log in'}
+              </span>
             </button>
           </form>
         </div>

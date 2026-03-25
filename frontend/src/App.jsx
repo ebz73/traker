@@ -1721,11 +1721,12 @@ function App() {
         return
       }
       setAuthSuccess(true)
+      const celebrationDuration = typeof window !== 'undefined' && window.innerWidth <= 1024 ? 400 : 2000
       setTimeout(() => {
         saveAuth(data.access_token, loginEmail)
         dismissToast()
         setAuthSuccess(false)
-      }, 2600)
+      }, celebrationDuration)
       setLoginPassword('')
       setAuthError('')
     } catch {
