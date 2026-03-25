@@ -482,14 +482,14 @@
 
 @media (max-width: 1400px) and (min-width: 1025px) {
   .lp-characterGroup {
-    transform: scale(0.75);
+    transform: scale(0.75) translateX(-10%);
     transform-origin: center center;
   }
 }
 
 @media (max-width: 1200px) and (min-width: 1025px) {
   .lp-characterGroup {
-    transform: scale(0.6);
+    transform: scale(0.6) translateX(-15%);
     transform-origin: center center;
   }
 }
