@@ -480,6 +480,20 @@
   }
 }
 
+@media (max-width: 1400px) and (min-width: 1025px) {
+  .lp-characterGroup {
+    transform: scale(0.75);
+    transform-origin: bottom center;
+  }
+}
+
+@media (max-width: 1200px) and (min-width: 1025px) {
+  .lp-characterGroup {
+    transform: scale(0.6);
+    transform-origin: bottom center;
+  }
+}
+
 [data-theme="dark"] .lp-heading {
   color: var(--ink);
 }
@@ -515,11 +529,11 @@
 
   .lp-rightPanel {
     padding: 24px;
-    background: linear-gradient(180deg, rgba(108, 63, 245, 0.08) 0%, var(--purple-bg) 30%);
+    background: linear-gradient(180deg, rgba(108, 63, 245, 0.04) 0%, var(--purple-bg) 15%, var(--purple-bg) 85%, rgba(108, 63, 245, 0.03) 100%);
   }
 
   [data-theme="dark"] .lp-rightPanel {
-    background: linear-gradient(180deg, rgba(108, 63, 245, 0.12) 0%, var(--bg) 30%);
+    background: linear-gradient(180deg, rgba(108, 63, 245, 0.05) 0%, var(--bg) 20%, var(--bg) 80%, rgba(108, 63, 245, 0.04) 100%);
   }
 
   .lp-mobileBrand {
