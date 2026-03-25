@@ -481,6 +481,11 @@
 }
 
 @media (max-width: 1400px) and (min-width: 1025px) {
+  .lp-stage {
+    align-items: flex-end;
+    padding-bottom: 40px;
+  }
+
   .lp-characterGroup {
     transform: scale(0.75);
     transform-origin: bottom center;
@@ -488,6 +493,11 @@
 }
 
 @media (max-width: 1200px) and (min-width: 1025px) {
+  .lp-stage {
+    align-items: flex-end;
+    padding-bottom: 50px;
+  }
+
   .lp-characterGroup {
     transform: scale(0.6);
     transform-origin: bottom center;
