@@ -483,7 +483,7 @@
 @media (max-width: 1400px) and (min-width: 1025px) {
   .lp-stage {
     align-items: flex-end;
-    padding-bottom: 40px;
+    padding-bottom: 80px;
   }
 
   .lp-characterGroup {
@@ -495,7 +495,7 @@
 @media (max-width: 1200px) and (min-width: 1025px) {
   .lp-stage {
     align-items: flex-end;
-    padding-bottom: 50px;
+    padding-bottom: 90px;
   }
 
   .lp-characterGroup {
