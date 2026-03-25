@@ -529,11 +529,11 @@
 
   .lp-rightPanel {
     padding: 24px;
-    background: linear-gradient(180deg, rgba(108, 63, 245, 0.04) 0%, var(--purple-bg) 15%, var(--purple-bg) 85%, rgba(108, 63, 245, 0.03) 100%);
+    background: color-mix(in srgb, var(--purple-bg) 97%, #6c3ff5 3%);
   }
 
   [data-theme="dark"] .lp-rightPanel {
-    background: linear-gradient(180deg, rgba(108, 63, 245, 0.05) 0%, var(--bg) 20%, var(--bg) 80%, rgba(108, 63, 245, 0.04) 100%);
+    background: color-mix(in srgb, var(--bg) 96%, #6c3ff5 4%);
   }
 
   .lp-mobileBrand {
