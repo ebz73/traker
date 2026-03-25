@@ -434,6 +434,13 @@
   cursor: not-allowed;
 }
 
+[data-theme="dark"] .lp-submitBtn {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0) 50%, rgba(0, 0, 0, 0.06) 100%),
+    rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
 .lp-toggleBtn {
   margin-top: 2px;
   border: none;
