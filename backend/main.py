@@ -65,9 +65,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from playwright.sync_api import Locator
-from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
-from playwright.sync_api import sync_playwright
+from patchright.sync_api import Locator
+from patchright.sync_api import TimeoutError as PlaywrightTimeoutError
+from patchright.sync_api import sync_playwright
 from pydantic import BaseModel
 from sqlalchemy import Boolean, Column, DateTime, Float, Index, Integer, String, create_engine, func, inspect, or_, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -160,205 +160,6 @@ SITE_SELECTORS = {
     'otto.de':            {'price': ['[data-qa="prd-price-offer"]', '.price__normal', '[class*="Price"]']},
     'zalando.de':         {'price': ['[data-testid="product-price"]', '._0Qm8W1', '[class*="Price"]']},
 }
-
-# --- STEALTH SETUP ---
-apply_stealth = lambda page: None
-
-try:
-    from playwright_stealth import Stealth
-    _stealth = Stealth()
-    apply_stealth = _stealth.apply_stealth_sync
-except ImportError:
-    try:
-        from playwright_stealth import stealth_sync as _stealth_sync
-        apply_stealth = _stealth_sync
-    except ImportError:
-        pass
-
-
-def _inject_manual_stealth(page) -> None:
-    """Inject essential anti-detection patches that playwright_stealth might miss."""
-    try:
-        page.add_init_script("""
-            // Hide webdriver flag
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-
-            // Fake plugins (headless Chrome has 0 plugins)
-            Object.defineProperty(navigator, 'plugins', {
-                get: () => [
-                    { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
-                    { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
-                    { name: 'Native Client', filename: 'internal-nacl-plugin' },
-                ],
-            });
-
-            // Fake languages
-            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-
-            // Consistent platform (must match User-Agent)
-            Object.defineProperty(navigator, 'platform', { get: () => 'Linux x86_64' });
-
-            // Hide automation indicators
-            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Array;
-            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;
-            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
-
-            // Fake chrome.runtime (missing in headless)
-            if (!window.chrome) window.chrome = {};
-            if (!window.chrome.runtime) window.chrome.runtime = { id: undefined };
-
-            // Override permissions query
-            const originalQuery = window.navigator.permissions.query;
-            window.navigator.permissions.query = (parameters) => (
-                parameters.name === 'notifications' ?
-                    Promise.resolve({ state: Notification.permission }) :
-                    originalQuery(parameters)
-            );
-
-            // Fix iframe contentWindow
-            const originalContentWindow = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentWindow');
-            Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {
-                get: function() {
-                    const result = originalContentWindow.get.call(this);
-                    if (result) {
-                        try {
-                            Object.defineProperty(result.navigator, 'webdriver', { get: () => undefined });
-                        } catch(e) {}
-                    }
-                    return result;
-                }
-            });
-
-            // Fix screen dimensions (headless reports wrong values)
-            Object.defineProperty(screen, 'width', { get: () => 1920 });
-            Object.defineProperty(screen, 'height', { get: () => 1080 });
-            Object.defineProperty(screen, 'availWidth', { get: () => 1920 });
-            Object.defineProperty(screen, 'availHeight', { get: () => 1040 });
-            Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
-            Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
-
-            // Fix window outer dimensions (headless reports 0)
-            if (window.outerWidth === 0) {
-                Object.defineProperty(window, 'outerWidth', { get: () => 1920 });
-                Object.defineProperty(window, 'outerHeight', { get: () => 1040 });
-            }
-
-            // Consistent hardware concurrency (headless sometimes reports wrong)
-            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
-
-            // Consistent device memory
-            Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
-
-            // Fix WebGL vendor/renderer (headless reports "Google Inc. (Google)" which is a known headless tell)
-            const getParameterProxyHandler = {
-                apply: function(target, thisArg, args) {
-                    const param = args[0];
-                    const UNMASKED_VENDOR_WEBGL = 0x9245;
-                    const UNMASKED_RENDERER_WEBGL = 0x9246;
-                    if (param === UNMASKED_VENDOR_WEBGL) return 'Google Inc. (NVIDIA)';
-                    if (param === UNMASKED_RENDERER_WEBGL) return 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1650, OpenGL 4.5)';
-                    return target.apply(thisArg, args);
-                }
-            };
-            try {
-                const canvas = document.createElement('canvas');
-                const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
-                if (gl) {
-                    const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
-                    if (debugInfo) {
-                        WebGLRenderingContext.prototype.getParameter = new Proxy(
-                            WebGLRenderingContext.prototype.getParameter, getParameterProxyHandler
-                        );
-                    }
-                }
-                // Also patch WebGL2
-                const gl2 = canvas.getContext('webgl2');
-                if (gl2) {
-                    const debugInfo2 = gl2.getExtension('WEBGL_debug_renderer_info');
-                    if (debugInfo2) {
-                        WebGL2RenderingContext.prototype.getParameter = new Proxy(
-                            WebGL2RenderingContext.prototype.getParameter, getParameterProxyHandler
-                        );
-                    }
-                }
-            } catch(e) {}
-
-            // Connection type (headless has no connection info)
-            if (navigator.connection === undefined) {
-                Object.defineProperty(navigator, 'connection', {
-                    get: () => ({
-                        effectiveType: '4g',
-                        rtt: 50,
-                        downlink: 10,
-                        saveData: false,
-                    })
-                });
-            }
-
-            // Battery API (return realistic values)
-            if (!navigator.getBattery) {
-                navigator.getBattery = () => Promise.resolve({
-                    charging: true,
-                    chargingTime: 0,
-                    dischargingTime: Infinity,
-                    level: 0.97,
-                    addEventListener: () => {},
-                    removeEventListener: () => {},
-                });
-            }
-
-            // chrome.loadTimes and chrome.csi — present in real Chrome, missing in headless
-            if (window.chrome) {
-                if (!window.chrome.loadTimes) {
-                    window.chrome.loadTimes = function() {
-                        return {
-                            commitLoadTime: Date.now() / 1000 - 0.3,
-                            connectionInfo: 'h2',
-                            finishDocumentLoadTime: Date.now() / 1000 - 0.1,
-                            finishLoadTime: Date.now() / 1000,
-                            firstPaintAfterLoadTime: Date.now() / 1000 + 0.05,
-                            firstPaintTime: Date.now() / 1000 - 0.2,
-                            navigationType: 'Other',
-                            npnNegotiatedProtocol: 'h2',
-                            requestTime: Date.now() / 1000 - 0.5,
-                            startLoadTime: Date.now() / 1000 - 0.4,
-                            wasAlternateProtocolAvailable: false,
-                            wasFetchedViaSpdy: true,
-                            wasNpnNegotiated: true,
-                        };
-                    };
-                }
-                if (!window.chrome.csi) {
-                    window.chrome.csi = function() {
-                        return {
-                            onloadT: Date.now(),
-                            startE: Date.now() - 500,
-                            pageT: 500 + Math.random() * 200,
-                            tran: 15,
-                        };
-                    };
-                }
-            }
-
-            // Notification.permission — headless returns 'default', real browsers vary
-            try {
-                Object.defineProperty(Notification, 'permission', {
-                    get: () => 'denied'
-                });
-            } catch(e) {}
-
-            // history.length — headless starts at 1, real browsers usually have more
-            try {
-                Object.defineProperty(window.history, 'length', { get: () => 4 });
-            } catch(e) {}
-
-            // maxTouchPoints — must be 0 for non-touch Linux desktop
-            try {
-                Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 });
-            } catch(e) {}
-        """)
-    except Exception as exc:
-        logger.debug("Manual stealth injection failed: %s", exc)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -5628,8 +5429,6 @@ def _scrape_with_chrome_cdp(
                 try:
                     page = context.new_page()
                     page.on("dialog", lambda dialog: dialog.dismiss())
-                    apply_stealth(page)
-                    _inject_manual_stealth(page)
                     inject_popup_prevention(page)
                     try:
                         wait_strategy = "networkidle" if proxy_config else "domcontentloaded"
