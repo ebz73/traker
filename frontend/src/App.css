@@ -800,6 +800,13 @@ body {
   gap: 12px;
 }
 
+.productHeadActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .productHead h3 {
   word-break: break-word;
   overflow-wrap: anywhere;
@@ -840,6 +847,26 @@ body {
   padding: 8px 12px;
   cursor: pointer;
   height: fit-content;
+}
+
+.scrapeSpinner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.scrapeSpinnerSvg {
+  animation: scrapeSpinnerRotate 0.9s linear infinite;
+}
+
+.manualScrapeBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@keyframes scrapeSpinnerRotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .productGrid {
@@ -1291,7 +1318,7 @@ body {
     gap: 8px;
   }
 
-  .productHead .iconBtn {
+  .productHead .productHeadActions {
     align-self: flex-end;
   }
 

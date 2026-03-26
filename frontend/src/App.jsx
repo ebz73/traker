@@ -909,6 +909,7 @@ class ChartErrorBoundary extends React.Component {
 function ProductCard({
   product,
   loadingId,
+  scrapingUrls,
   expandedHistory,
   historyByUrl,
   historyLoadingByUrl,
@@ -923,6 +924,7 @@ function ProductCard({
   const shouldShowHistoryLoading = isHistoryLoading && history.length === 0
   const isExpanded = expandedHistory[product.id]
   const isLoading = loadingId === product.id
+  const isScraping = scrapingUrls.has(product.url)
   const trend = getPriceTrend(history)
   const frequency = normalizeFrequency(product.frequency)
   const thresholdInputId = `threshold-${product.id}`
@@ -988,18 +990,36 @@ function ProductCard({
             Last checked: {product.lastChecked ? new Date(product.lastChecked).toLocaleString() : 'Never'}
           </div>
         </div>
-        <button
-          className="iconBtn"
-          onClick={() => {
-            if (window.confirm(`Remove "${product.name || 'this product'}" from your droplist?`)) {
-              onRemove(product.id)
-            }
-          }}
-          aria-label={`Delete ${product.name || 'product'}`}
-          type="button"
-        >
-          Delete
-        </button>
+        <div className="productHeadActions">
+          {isScraping && (
+            <div className="scrapeSpinner" title="Checking price...">
+              <svg width="20" height="20" viewBox="0 0 20 20" className="scrapeSpinnerSvg">
+                <circle
+                  cx="10"
+                  cy="10"
+                  r="8"
+                  fill="none"
+                  stroke="var(--purple)"
+                  strokeWidth="2.5"
+                  strokeDasharray="36 14"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </div>
+          )}
+          <button
+            className="iconBtn"
+            onClick={() => {
+              if (window.confirm(`Remove "${product.name || 'this product'}" from your droplist?`)) {
+                onRemove(product.id)
+              }
+            }}
+            aria-label={`Delete ${product.name || 'product'}`}
+            type="button"
+          >
+            Delete
+          </button>
+        </div>
       </div>
 
       <div className="productGrid">
@@ -1086,12 +1106,12 @@ function ProductCard({
       </div>
 
       <button
-        className="primaryBtn narrow"
+        className="primaryBtn narrow manualScrapeBtn"
         onClick={() => onCheck(product)}
-        disabled={isLoading}
-        aria-busy={isLoading}
+        disabled={isScraping || isLoading}
+        aria-busy={isScraping}
       >
-        {isLoading ? 'Checking...' : 'Manual Price Check'}
+        {isScraping ? 'Checking...' : 'Manual Price Check'}
       </button>
 
       <button className="historyToggle" onClick={() => onToggleHistory(product.id)}>
@@ -1351,6 +1371,7 @@ function App() {
 
   const [products, setProducts] = useState([])
   const [loadingId, setLoadingId] = useState('')
+  const [scrapingUrls, setScrapingUrls] = useState(new Set())
   const [toast, setToast] = useState(null)
   const toastIdRef = useRef(0)
 
@@ -2465,8 +2486,14 @@ function App() {
   }
 
   const checkProductNow = async (product) => {
-    setLoadingId(product.id)
+    if (scrapingUrls.has(product.url)) {
+      showToast('Price is still being checked', 'info')
+      return
+    }
+
+    setScrapingUrls((prev) => new Set(prev).add(product.url))
     showToast('Checking price...', 'neutral')
+    let shouldClearScrapingUrl = true
 
     try {
       const { status, data } = await scrapeWithPolling(
@@ -2483,6 +2510,17 @@ function App() {
           headers: authHeaders(),
         },
       )
+
+      if (data?.status === 'pending') {
+        shouldClearScrapingUrl = false
+        setTimeout(() => {
+          setScrapingUrls((prev) => {
+            const next = new Set(prev)
+            next.delete(product.url)
+            return next
+          })
+        }, 60000)
+      }
 
       if (status === 409 && extractUiChangedError(data)) {
         updateProduct(product.id, { ui_changed: true })
@@ -2538,7 +2576,13 @@ function App() {
     } catch {
       showToast('Backend connection failed.', 'error')
     } finally {
-      setLoadingId('')
+      if (shouldClearScrapingUrl) {
+        setScrapingUrls((prev) => {
+          const next = new Set(prev)
+          next.delete(product.url)
+          return next
+        })
+      }
     }
   }
 
@@ -2853,6 +2897,7 @@ function App() {
                     key={product.id}
                     product={product}
                     loadingId={loadingId}
+                    scrapingUrls={scrapingUrls}
                     expandedHistory={expandedHistory}
                     historyByUrl={historyByUrl}
                     historyLoadingByUrl={historyLoadingByUrl}
