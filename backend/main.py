@@ -2777,54 +2777,35 @@ def _extract_with_custom_selector(
 
 HTTP1_DOMAINS = {"www.bestbuy.com", "bestbuy.com"}
 BOT_AGGRESSIVE_DOMAINS = {"walmart.com", "target.com", "bestbuy.com", "nike.com", "homedepot.com"}
-_BLOCKED_PAGE_MARKERS = [
-    "verify you are human",
-    "robot or human",
-    "press & hold",
-    "perimeterx",
-    "px-captcha",
-    "sorry, you have been blocked",
-    "your ip address has been blocked",
+_BOT_TITLE_MARKERS = [
+    "just a moment", "checking your browser", "attention required",
+    "verify you are human", "security check", "security verification",
+    "security challenge", "access denied", "please wait", "one more step",
+    "cloudflare", "captcha", "robot",
 ]
-BOT_TITLE_MARKERS = [
-    "cloudflare",
-    "captcha",
-    "security check",
-    "security verification",
-    "security challenge",
-    "robot",
-    "access denied",
-    "just a moment",
+_CAPTCHA_TEXT_MARKERS = [
+    "verify you are human", "press & hold", "robot or human",
+    "please verify you are a human", "checking if the site connection is secure",
+    "please stand by", "performing a security check",
+    "perimeterx", "px-captcha",
 ]
+_BLOCKED_TEXT_MARKERS = [
+    "sorry, you have been blocked", "blocked your ip",
+    "your ip address has been blocked", "this request was blocked",
+]
+_BLOCKED_PAGE_MARKERS = _CAPTCHA_TEXT_MARKERS + _BLOCKED_TEXT_MARKERS
 
-# ── Cookie banner: named-framework selectors (reject/necessary-only first) ─
-_COOKIE_FRAMEWORK_SELECTORS = [
-    "#onetrust-reject-all-handler",
-    "button#onetrust-reject-all-handler",
-    "#CybotCookiebotDialogBodyButtonDecline",
-    "a#CybotCookiebotDialogBodyButtonDecline",
-    ".truste_overlay .pdynamicbutton a.call",
-    ".truste_popframe .required",
-    ".qc-cmp2-summary-buttons button:first-child",
-    "#didomi-notice-disagree-button",
-    ".osano-cm-deny",
-    ".termly-popup .t-declineButton",
-    ".cmplz-btn.cmplz-deny",
-    ".cn-refuse",
-    ".cky-btn-reject",
-    ".iubenda-cs-reject-btn",
-    "[data-testid='uc-deny-all-button']",
-    "#axeptio_btn_dismiss",
-    "#tarteaucitronAllDenied2",
-    ".cc-deny",
-    "#cookiescript_reject",
-    ".js-cookie-consent-reject",
-    "[data-cookiefirst-action='reject']",
-    "#consent-reject",
-    ".evidon-banner-declinebutton",
-    "#gdpr-cookie-reject",
-    ".fc-cta-do-not-consent",
-]
+_CONSENT_INDICATOR_WORDS = (
+    "cookie", "consent", "privacy", "gdpr", "onetrust", "didomi",
+    "usercentrics", "cookiefirst", "cybot", "osano", "cookiebot",
+    "tarteaucitron", "cookiescript", "complianz", "cookieyes",
+)
+_CONSENT_WORDS_JS = json.dumps(list(_CONSENT_INDICATOR_WORDS))
+
+# ── Cookie banner: named-framework selectors ─────────────────────────────
+# _COOKIE_FRAMEWORK_SELECTORS, _COOKIE_SETTINGS_SELECTORS, _COOKIE_SAVE_SELECTORS,
+# _COOKIE_CONTAINER_SELECTORS, and _COOKIE_IFRAME_HINT_SELECTORS are auto-derived
+# from _CMP_PROFILES below (see _collect_cmp_selectors).
 _COOKIE_REJECT_CSS = [
     "button[aria-label*='Reject' i]",
     "button[aria-label*='Decline' i]",
@@ -2857,29 +2838,6 @@ _COOKIE_REJECT_TEXTS = [
     "rifiuta tutto", "rifiuta tutti", "solo necessari",
     "alles weigeren", "alleen noodzakelijke",
 ]
-_COOKIE_SETTINGS_SELECTORS = [
-    "#onetrust-pc-btn-handler",
-    "button#onetrust-pc-btn-handler",
-    "#CybotCookiebotDialogBodyButtonDetails",
-    "a#CybotCookiebotDialogBodyButtonDetails",
-    ".qc-cmp2-link",
-    ".qc-cmp2-footer-links button",
-    "#didomi-notice-learn-more-button",
-    ".osano-cm-manage",
-    ".termly-styles-manage-preferences-button",
-    ".termly-display-preferences",
-    ".cmplz-btn.cmplz-view-preferences",
-    ".cky-btn-customize",
-    ".iubenda-cs-customize-btn",
-    "[data-testid='uc-more-button']",
-    "[data-testid='uc-manage-all-button']",
-    "[data-testid='uc-manage-options-button']",
-    "#axeptio_btn_configure",
-    "#cookiescript_manage",
-    "[data-cookiefirst-action='settings']",
-    ".fc-manage-preferences",
-    ".cc-link",
-]
 _COOKIE_SETTINGS_TEXTS = [
     "manage preferences", "manage options", "manage settings", "cookie settings",
     "privacy settings", "customize", "customise", "preferences", "more options",
@@ -2889,20 +2847,6 @@ _COOKIE_SETTINGS_TEXTS = [
     "configuración", "gestionar preferencias",
     "impostazioni", "gestisci preferenze",
     "instellingen", "voorkeuren beheren",
-]
-_COOKIE_SAVE_SELECTORS = [
-    "#onetrust-confirm-btn-handler",
-    "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowallSelection",
-    ".qc-cmp2-footer button:last-child",
-    "#didomi-save-button",
-    "[data-testid='didomi-save-button']",
-    ".osano-cm-save",
-    ".cmplz-btn.cmplz-save-preferences",
-    ".cky-btn-preferences",
-    "[data-testid='uc-save-button']",
-    "#cookiescript_save",
-    "[data-cookiefirst-action='save']",
-    ".fc-confirm-choices",
 ]
 _COOKIE_SAVE_TEXTS = [
     "save", "save preferences", "confirm choices", "save and exit",
@@ -2945,25 +2889,6 @@ _COOKIE_ACCEPT_TEXTS = [
     "accetta tutto", "accetta tutti",
     "alles accepteren", "alles toestaan",
 ]
-_COOKIE_CONTAINER_SELECTORS = [
-    "#sp-cc", ".sp-cc-banner",
-    "#onetrust-banner-sdk", "#onetrust-consent-sdk", "#CybotCookiebotDialog",
-    ".truste_overlay", ".qc-cmp2-container", "#didomi-popup", ".osano-cm-dialog",
-    "#usercentrics-root", "[data-testid='uc-banner-content']",
-    ".cky-consent-container", ".cky-modal",
-    ".cmplz-cookiebanner", "#cookie-notice", ".cookie-notice", ".cookie-banner",
-    ".cookie-consent", "#cookie-banner", "#cookie-consent", "#cookieBanner",
-    "#cookieConsent", ".cc-banner", ".cc-window",
-    "[id*='cookie-bar']", "[class*='cookie-bar']", "[class*='gdpr-banner']",
-    "[aria-label*='cookie' i]", "[aria-label*='consent' i]",
-    "#tarteaucitronRoot",
-    ".fc-consent-root",
-    "#cookiescript_injected",
-    "[class*='CookieConsent']",
-    "[id*='gdpr']",
-    "[class*='privacy-banner']",
-    "#cookie-law-info-bar",
-]
 _COOKIE_BODY_KEYWORDS = (
     "we use cookies", "this site uses cookies", "cookie policy",
     "your privacy", "gdpr", "privacy preferences", "privacy choices",
@@ -2980,18 +2905,12 @@ _COOKIE_BODY_KEYWORDS = (
     "wij gebruiken cookies", "deze website gebruikt cookies", "cookie-instellingen",
     "utilizamos cookies", "este site utiliza cookies", "configurações de cookies",
 )
-_COOKIE_IFRAME_HINT_SELECTORS = [
-    "iframe[src*='consent' i]",
-    "iframe[src*='cookie' i]",
-    "iframe[src*='privacy' i]",
-    "iframe[src*='cmp' i]",
-    "iframe[src*='onetrust' i]",
-    "iframe[src*='didomi' i]",
-    "iframe[src*='cookiefirst' i]",
-    "iframe[src*='usercentrics' i]",
-    "iframe[id*='cookie' i]",
-    "iframe[class*='cookie' i]",
-]
+_NON_ENGLISH_PREFIXES = ("wir ", "diese ", "nous ", "ce site", "utilizamos", "este sitio",
+                          "utilizziamo", "questo", "wij ", "deze ", "este site", "configurações")
+_CONSENT_TEXT_SIGNALS = [kw for kw in _COOKIE_BODY_KEYWORDS if not any(
+    pfx in kw for pfx in _NON_ENGLISH_PREFIXES
+)]
+_CONSENT_TEXT_SIGNALS_JS = json.dumps(_CONSENT_TEXT_SIGNALS)
 _COOKIE_NON_ESSENTIAL_KEYWORDS = (
     "analytics", "analytic", "advertising", "marketing", "targeting",
     "personalization", "personalisation", "performance", "functional",
@@ -3098,6 +3017,71 @@ _CMP_SITE_OVERRIDES: Dict[str, Dict[str, List[str]]] = {
         "accept_selectors": ["#sp-cc-accept"],
     },
 }
+
+
+def _collect_cmp_selectors(key: str) -> List[str]:
+    """Collect all selectors of a given type from all CMP profiles, preserving order, deduped."""
+    seen: set = set()
+    result: List[str] = []
+    for profile in _CMP_PROFILES.values():
+        for sel in profile.get(key, []):
+            if sel not in seen:
+                seen.add(sel)
+                result.append(sel)
+    return result
+
+
+_COOKIE_FRAMEWORK_SELECTORS = _collect_cmp_selectors("reject_selectors") + [
+    # Extra reject selectors not tied to a specific CMP profile:
+    ".truste_overlay .pdynamicbutton a.call",
+    ".truste_popframe .required",
+    ".termly-popup .t-declineButton",
+    ".cn-refuse",
+    ".iubenda-cs-reject-btn",
+    "#axeptio_btn_dismiss",
+    "#tarteaucitronAllDenied2",
+    ".cc-deny",
+    ".js-cookie-consent-reject",
+    "#consent-reject",
+    ".evidon-banner-declinebutton",
+    "#gdpr-cookie-reject",
+]
+
+_COOKIE_SETTINGS_SELECTORS = _collect_cmp_selectors("settings_selectors") + [
+    # Extra settings selectors not tied to a specific CMP profile:
+    ".termly-styles-manage-preferences-button",
+    ".termly-display-preferences",
+    ".iubenda-cs-customize-btn",
+    "#axeptio_btn_configure",
+    ".cc-link",
+]
+
+_COOKIE_SAVE_SELECTORS = _collect_cmp_selectors("save_selectors")
+
+_COOKIE_CONTAINER_SELECTORS = _collect_cmp_selectors("container_selectors") + [
+    # Generic container selectors not tied to a CMP:
+    ".truste_overlay",
+    "#cookie-notice", ".cookie-notice", ".cookie-banner",
+    ".cookie-consent", "#cookie-banner", "#cookie-consent",
+    "#cookieBanner", "#cookieConsent", ".cc-banner", ".cc-window",
+    "[id*='cookie-bar']", "[class*='cookie-bar']", "[class*='gdpr-banner']",
+    "[aria-label*='cookie' i]", "[aria-label*='consent' i]",
+    "#tarteaucitronRoot",
+    "[class*='CookieConsent']",
+    "[id*='gdpr']",
+    "[class*='privacy-banner']",
+    "#cookie-law-info-bar",
+]
+
+_COOKIE_IFRAME_HINT_SELECTORS = _collect_cmp_selectors("iframe_selectors") + [
+    # Generic iframe selectors:
+    "iframe[src*='consent' i]",
+    "iframe[src*='cookie' i]",
+    "iframe[src*='privacy' i]",
+    "iframe[src*='cmp' i]",
+    "iframe[id*='cookie' i]",
+    "iframe[class*='cookie' i]",
+]
 
 # ── Popup/overlay dismissal selectors ────────────────────────────────────
 _POPUP_CLOSE_SELECTORS = [
@@ -3732,9 +3716,8 @@ _POPUP_PREVENTION_JS = r"""
     const CLOSE_ARIA = ['close', 'dismiss', 'close dialog', 'close modal'];
     const CLOSE_CLASSES = ['close', 'dismiss', 'popup-close', 'modal-close',
                            'overlay-close', 'btn-close', 'pum-close'];
-    const COOKIE_INDICATORS = ['cookie', 'consent', 'privacy', 'gdpr',
-                               'onetrust', 'didomi', 'cybot', 'usercentrics',
-                               'cookiefirst', 'osano'];
+    const COOKIE_INDICATORS = """ + _CONSENT_WORDS_JS + r""";
+
     const POPUP_INDICATORS = ['popup', 'modal', 'overlay', 'dialog',
                               'newsletter', 'subscribe', 'email-signup',
                               'exit-intent', 'lead-capture', 'signup',
@@ -3947,7 +3930,7 @@ _DETECT_BLOCKING_OVERLAY_JS = """
     const vh = window.innerHeight;
     const candidates = document.querySelectorAll('div, section, aside, [role="dialog"]');
     const results = [];
-    const consentWords = ['cookie', 'consent', 'privacy', 'gdpr', 'onetrust', 'didomi', 'usercentrics', 'cookiefirst', 'cybot', 'osano', 'cookiebot', 'tarteaucitron', 'cookiescript', 'complianz', 'cookieyes'];
+    const consentWords = """ + _CONSENT_WORDS_JS + """;
     const signupWords = ['newsletter', 'subscribe', 'email', 'offer', 'discount', 'promo', 'save'];
     for (const el of candidates) {
         const style = window.getComputedStyle(el);
@@ -4204,7 +4187,7 @@ def _collect_top_blocker_metadata(page, *, prefer_cookie: bool = False) -> Optio
         return page.evaluate(
             """(preferCookie) => {
                 const els = document.querySelectorAll('div, section, aside, form, iframe, [role="dialog"], [aria-modal="true"]');
-                const cookieWords = ['cookie', 'consent', 'privacy', 'gdpr', 'onetrust', 'didomi', 'usercentrics'];
+                const cookieWords = """ + _CONSENT_WORDS_JS + """;
                 const popupWords = ['popup', 'modal', 'overlay', 'newsletter', 'subscribe', 'offer', 'discount'];
                 let best = null;
                 let bestScore = -1;
@@ -4281,7 +4264,7 @@ def _cookie_text_signal(text: str) -> bool:
         return False
     return any(keyword in lower_text for keyword in _COOKIE_BODY_KEYWORDS) or any(
         token in lower_text
-        for token in ("cookie", "consent", "privacy", "gdpr", "tracking technologies")
+        for token in _CONSENT_INDICATOR_WORDS + ("tracking technologies",)
     )
 
 
@@ -4571,7 +4554,6 @@ def _try_shadow_dom_close(page) -> bool:
         result = page.evaluate(_SHADOW_DOM_CLOSE_JS)
         if result:
             logger.info("Popup dismissed via shadow DOM close button")
-            _clear_scroll_locks(page, reason="shadow DOM popup dismissal")
             time.sleep(random.uniform(0.3, 0.6))
             return True
     except Exception as exc:
@@ -4639,8 +4621,6 @@ def _detect_and_remove_blocking_overlays(page) -> int:
                 time.sleep(random.uniform(0.2, 0.4))
         except Exception as exc:
             logger.warning("Failed to force-hide overlay '%s': %s", selector, exc)
-    if removed:
-        _clear_scroll_locks(page, reason="overlay dismissal")
     return removed
 
 
@@ -4661,69 +4641,9 @@ def _force_hide_site_overlays(page, domain: str = "") -> int:
         except Exception as exc:
             logger.warning("Failed to force-hide site overlay '%s' for %s: %s", selector, domain, exc)
 
-    if removed:
-        _clear_scroll_locks(page, reason=f"site overlay dismissal ({domain})")
     return removed
 
 
-def _handle_iframe_popups(page) -> int:
-    """Detect and dismiss popups that live inside iframes."""
-    dismissed = 0
-    iframe_targets = _iter_exact_iframe_targets(
-        page,
-        [
-            'iframe[src*="popup"]',
-            'iframe[src*="modal"]',
-            'iframe[src*="overlay"]',
-            'iframe[src*="newsletter"]',
-            'iframe[src*="subscribe"]',
-            'iframe[class*="popup"]',
-            'iframe[class*="modal"]',
-            'iframe[id*="popup"]',
-        ],
-        max_per_selector=2,
-    )
-
-    for iframe_target in iframe_targets:
-        iframe_loc = iframe_target.get("locator")
-        if not iframe_loc:
-            continue
-        try:
-            hidden = iframe_loc.evaluate(
-                """(iframe) => {
-                    let el = iframe;
-                    for (let i = 0; i < 5 && el; i++) {
-                        const style = window.getComputedStyle(el);
-                        const z = parseInt(style.zIndex, 10);
-                        if (z >= 500 && (style.position === 'fixed' || style.position === 'absolute') && el.id !== 'app') {
-                            el.style.display = 'none';
-                            el.style.visibility = 'hidden';
-                            el.style.pointerEvents = 'none';
-                            return true;
-                        }
-                        el = el.parentElement;
-                    }
-                    // No high-z popup parent found - only hide if the iframe itself looks like a popup
-                    const iframeStyle = window.getComputedStyle(iframe);
-                    const iframeZ = parseInt(iframeStyle.zIndex, 10);
-                    if (iframeZ >= 500 && (iframeStyle.position === 'fixed' || iframeStyle.position === 'absolute')) {
-                        iframe.style.display = 'none';
-                        iframe.style.visibility = 'hidden';
-                        iframe.style.pointerEvents = 'none';
-                        return true;
-                    }
-                    return false;
-                }"""
-            )
-            if hidden:
-                dismissed += 1
-        except Exception as exc:
-            logger.warning("Exact iframe popup hiding failed for %s: %s", iframe_target.get("selector"), exc)
-
-    if dismissed:
-        logger.info("Removed %d popup iframes", dismissed)
-        _clear_scroll_locks(page, reason="generic iframe popup dismissal")
-    return dismissed
 
 
 # ── Cookie banner ─────────────────────────────────────────────────────────
@@ -4969,11 +4889,9 @@ def _popup_present(page) -> bool:
             () => {
                 const vw = window.innerWidth;
                 const vh = window.innerHeight;
-                const consentWords = ['cookie', 'consent', 'privacy', 'gdpr', 'onetrust',
-                                      'didomi', 'usercentrics', 'cookiefirst', 'cybot'];
-                const cookieTextSignals = ['we use cookies', 'cookie policy', 'cookie consent',
-                    'this site uses cookies', 'manage cookies', 'cookie settings',
-                    'your privacy', 'gdpr', 'data protection', 'privacy preferences'];
+                const consentWords = """ + _CONSENT_WORDS_JS + """;
+                const cookieTextSignals = """ + _CONSENT_TEXT_SIGNALS_JS + """;
+
 
                 // Check 1: any visible role="dialog" or aria-modal that's not a cookie banner
                 const dialogs = document.querySelectorAll('[role="dialog"], [aria-modal="true"]');
@@ -5045,37 +4963,6 @@ def _popup_present(page) -> bool:
         except Exception:
             continue
 
-    try:
-        has_overlay = page.evaluate("""
-            () => {
-                const vw = window.innerWidth;
-                const vh = window.innerHeight;
-                const consentWords = ['cookie', 'consent', 'privacy', 'gdpr', 'onetrust', 'didomi', 'usercentrics', 'cookiefirst', 'cybot'];
-                const els = document.querySelectorAll('div, section, aside, [role="dialog"], form');
-                for (const el of els) {
-                    const s = window.getComputedStyle(el);
-                    if (s.display === 'none' || s.visibility === 'hidden' || s.opacity === '0') continue;
-                    const z = parseInt(s.zIndex, 10);
-                    if (isNaN(z) || z < 500) continue;
-                    const pos = s.position;
-                    if (pos !== 'fixed' && pos !== 'absolute') continue;
-                    const cls = (el.className || '').toString().toLowerCase();
-                    const id = (el.id || '').toLowerCase();
-                    const text = ((el.innerText || el.textContent || '') + ' ' + (el.getAttribute('aria-label') || ''))
-                        .toLowerCase().slice(0, 220);
-                    if (consentWords.some(word => cls.includes(word) || id.includes(word) || text.includes(word))) continue;
-                    const r = el.getBoundingClientRect();
-                    if (r.width > vw * 0.3 && r.height > vh * 0.3) return true;
-                    if (el.querySelector('input[type="email"], input[placeholder*="email" i]')) return true;
-                }
-                return false;
-            }
-        """)
-        if has_overlay:
-            return True
-    except Exception:
-        pass
-
     for iframe_sel, _ in _IFRAME_POPUP_TARGETS:
         try:
             loc = page.locator(iframe_sel)
@@ -5124,7 +5011,7 @@ _IFRAME_POPUP_TARGETS = [
         ],
     ),
     (
-        'iframe[src*="popup"], iframe[src*="campaign"], iframe[src*="subscribe"]',
+        'iframe[src*="popup"], iframe[src*="campaign"], iframe[src*="subscribe"], iframe[src*="modal"], iframe[src*="overlay"], iframe[src*="newsletter"], iframe[class*="popup"], iframe[class*="modal"], iframe[id*="popup"]',
         [
             'button[aria-label*="Close" i]',
             'button[aria-label*="Dismiss" i]',
@@ -5229,8 +5116,6 @@ def _dismiss_iframe_popups(page) -> int:
             except Exception as exc:
                 logger.warning("Iframe popup check failed for '%s': %s", iframe_selector[:40], exc)
 
-    if dismissed:
-        _clear_scroll_locks(page, reason="iframe popup dismissal")
     return dismissed
 
 
@@ -5254,16 +5139,13 @@ def _dismiss_single_popup(page, domain: str = "", attempted_actions: Optional[Li
         site_texts = override.get("close_texts", [])
         _record_attempt(attempted_actions, f"site-popup-overrides:{domain}")
         if site_sels and _click_first_match(page, site_sels, timeout_ms=800, label=f"Popup ({domain})"):
-            _clear_scroll_locks(page, reason=f"site popup dismissal ({domain})")
             return True
         if site_texts and _click_first_text_match(page, site_texts, timeout_ms=800, label=f"Popup ({domain})"):
-            _clear_scroll_locks(page, reason=f"site popup dismissal ({domain})")
             return True
 
     # Layer 2: generic close selectors
     _record_attempt(attempted_actions, "generic-popup-close-selectors")
     if _click_first_match(page, _POPUP_CLOSE_SELECTORS, timeout_ms=1000, label="Popup"):
-        _clear_scroll_locks(page, reason="generic popup close selector")
         return True
 
     # Layer 3: text match SCOPED to inside visible popup containers
@@ -5289,7 +5171,6 @@ def _dismiss_single_popup(page, domain: str = "", attempted_actions: Optional[Li
                                     btn.first.click(timeout=800, force=True)
                                 time.sleep(random.uniform(0.25, 0.55))
                                 logger.info("Popup dismissed via scoped text match: '%s' inside %s", text, container_sel)
-                                _clear_scroll_locks(page, reason="scoped popup text dismissal")
                                 return True
                         except Exception:
                             pass
@@ -5313,7 +5194,6 @@ def _dismiss_single_popup(page, domain: str = "", attempted_actions: Optional[Li
         time.sleep(random.uniform(0.3, 0.5))
         if not _popup_present(page):
             logger.info("Popup dismissed via Escape key")
-            _clear_scroll_locks(page, reason="popup escape")
             return True
     except Exception:
         pass
@@ -5346,8 +5226,6 @@ def _handle_popups_and_overlays(page, url: str = "", max_passes: int = 4) -> int
             else:
                 logger.info("Popup pass %d: detected but no dismissal method worked", pass_num + 1)
                 break
-    # Always check for iframe popups
-    dismissed += _handle_iframe_popups(page)
     if dismissed:
         _clear_scroll_locks(page, reason="popup batch")
         logger.info("Total popups/overlays dismissed: %d", dismissed)
@@ -5370,7 +5248,6 @@ def handle_all_popups(page, url: str = "", is_recheck: bool = False) -> int:
         return 0
     total = 0
     domain = _get_domain(url) if url else ""
-    iframe_pass_done = False
 
     should_check_cookie = (not is_recheck) or _cookie_banner_present(page)
     if should_check_cookie:
@@ -5378,17 +5255,13 @@ def handle_all_popups(page, url: str = "", is_recheck: bool = False) -> int:
             total += 1
 
     total += _handle_popups_and_overlays(page, url=url)
-    # _handle_popups_and_overlays already runs iframe checks internally,
-    # only do a standalone pass if popups were found (new iframes may have appeared)
-    if total > 0:
-        total += _dismiss_iframe_popups(page)
-        iframe_pass_done = True
 
     if not is_recheck and total == 0:
         _anti_bot_sleep(2.5, 4.0)
         total += _handle_popups_and_overlays(page, url=url)
-        if not iframe_pass_done:
-            total += _dismiss_iframe_popups(page)
+
+    # Single final iframe pass — catches any that appeared during cookie/popup handling
+    total += _dismiss_iframe_popups(page)
 
     if total == 0:
         total += _force_hide_site_overlays(page, domain=domain)
@@ -5463,41 +5336,15 @@ def _detect_page_issues(page) -> Dict[str, bool]:
         is_captcha = True
         logger.info("CAPTCHA detected: challenge DOM element present, page has only %d chars", text_length)
 
-    challenge_title_markers = [
-        "just a moment",
-        "checking your browser",
-        "attention required",
-        "verify you are human",
-        "security check",
-        "access denied",
-        "please wait",
-        "one more step",
-    ]
-    if any(marker in title for marker in challenge_title_markers):
+    if any(marker in title for marker in _BOT_TITLE_MARKERS):
         if is_minimal_content:
             is_captcha = True
             logger.info("CAPTCHA detected: challenge title '%s', page has only %d chars", title[:60], text_length)
 
-    captcha_text_markers = [
-        "verify you are human",
-        "press & hold",
-        "robot or human",
-        "please verify you are a human",
-        "checking if the site connection is secure",
-        "please stand by",
-        "performing a security check",
-    ]
-    blocked_text_markers = [
-        "sorry, you have been blocked",
-        "blocked your ip",
-        "your ip address has been blocked",
-        "this request was blocked",
-    ]
-
     if is_minimal_content:
-        if any(marker in body for marker in captcha_text_markers):
+        if any(marker in body for marker in _CAPTCHA_TEXT_MARKERS):
             is_captcha = True
-        if any(marker in body for marker in blocked_text_markers):
+        if any(marker in body for marker in _BLOCKED_TEXT_MARKERS):
             is_blocked = True
 
     return {"is_captcha": is_captcha, "is_blocked": is_blocked}
@@ -5794,7 +5641,7 @@ def _scrape_with_chrome_cdp(
                             )
                             continue
                         page_title = (page.title() or "").strip()
-                        if any(bot_word in page_title.lower() for bot_word in BOT_TITLE_MARKERS):
+                        if any(bot_word in page_title.lower() for bot_word in _BOT_TITLE_MARKERS):
                             logger.warning("CDP bot challenge title detected for %s on attempt %d: %s", url, attempt + 1, page_title)
                             try:
                                 page.close()
