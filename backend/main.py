@@ -255,7 +255,7 @@ def _inject_manual_stealth(page) -> None:
                     const UNMASKED_VENDOR_WEBGL = 0x9245;
                     const UNMASKED_RENDERER_WEBGL = 0x9246;
                     if (param === UNMASKED_VENDOR_WEBGL) return 'Google Inc. (NVIDIA)';
-                    if (param === UNMASKED_RENDERER_WEBGL) return 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1650 Direct3D11 vs_5_0 ps_5_0, D3D11)';
+                    if (param === UNMASKED_RENDERER_WEBGL) return 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1650, OpenGL 4.5)';
                     return target.apply(thisArg, args);
                 }
             };
@@ -306,32 +306,6 @@ def _inject_manual_stealth(page) -> None:
                 });
             }
 
-            // Add subtle noise to canvas fingerprinting
-            const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
-            HTMLCanvasElement.prototype.toDataURL = function(type) {
-                if (this.width === 0 || this.height === 0) return originalToDataURL.apply(this, arguments);
-                const ctx = this.getContext('2d');
-                if (ctx) {
-                    // Add invisible noise pixel
-                    const imageData = ctx.getImageData(0, 0, 1, 1);
-                    imageData.data[3] = imageData.data[3] === 0 ? 0 : (imageData.data[3] ^ 1);
-                    ctx.putImageData(imageData, 0, 0);
-                }
-                return originalToDataURL.apply(this, arguments);
-            };
-
-            const originalToBlob = HTMLCanvasElement.prototype.toBlob;
-            HTMLCanvasElement.prototype.toBlob = function(callback, type, quality) {
-                if (this.width === 0 || this.height === 0) return originalToBlob.apply(this, arguments);
-                const ctx = this.getContext('2d');
-                if (ctx) {
-                    const imageData = ctx.getImageData(0, 0, 1, 1);
-                    imageData.data[3] = imageData.data[3] === 0 ? 0 : (imageData.data[3] ^ 1);
-                    ctx.putImageData(imageData, 0, 0);
-                }
-                return originalToBlob.apply(this, arguments);
-            };
-
             // chrome.loadTimes and chrome.csi — present in real Chrome, missing in headless
             if (window.chrome) {
                 if (!window.chrome.loadTimes) {
@@ -374,7 +348,7 @@ def _inject_manual_stealth(page) -> None:
 
             // history.length — headless starts at 1, real browsers usually have more
             try {
-                Object.defineProperty(window.history, 'length', { get: () => 3 + Math.floor(Math.random() * 5) });
+                Object.defineProperty(window.history, 'length', { get: () => 4 });
             } catch(e) {}
 
             // maxTouchPoints — must be 0 for non-touch Linux desktop
@@ -3272,45 +3246,143 @@ _CDP_BROWSER_LOCK = threading.Lock()
 _CDP_PLAYWRIGHT: Optional[Any] = None
 _CDP_BROWSER: Optional[Any] = None
 
-# ── Per-domain CAPTCHA cooldown ──────────────────────────────────────────
-# When a domain triggers CAPTCHA, we stop hitting it via CDP for a cooldown
-# period to let the block expire. Maps domain -> timestamp when cooldown ends.
-_CAPTCHA_COOLDOWN: Dict[str, float] = {}
-_CAPTCHA_COOLDOWN_LOCK = threading.Lock()
-CAPTCHA_COOLDOWN_SECONDS = float(os.getenv("CAPTCHA_COOLDOWN_SECONDS", "1800"))
+# ── CDP per-domain concurrency guard ─────────────────────────────────────
+# Prevents multiple simultaneous CDP scrapes for the same domain.
+# Second request waits for the first to finish, then checks a short-lived cache
+# keyed by domain+URL to avoid cross-product result reuse.
+_CDP_DOMAIN_LOCKS: Dict[str, threading.Lock] = {}
+_CDP_DOMAIN_LOCKS_GUARD = threading.Lock()
+_CDP_DOMAIN_RESULTS: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+CDP_RESULT_CACHE_SECONDS = float(os.getenv("CDP_RESULT_CACHE_SECONDS", "30"))
 
 
-def _mark_domain_captcha_blocked(domain: str, cooldown_seconds: Optional[float] = None) -> None:
-    """Mark a domain as CAPTCHA-blocked. CDP scraping will be skipped until cooldown expires."""
-    cd = cooldown_seconds if cooldown_seconds is not None else CAPTCHA_COOLDOWN_SECONDS
-    with _CAPTCHA_COOLDOWN_LOCK:
-        _CAPTCHA_COOLDOWN[domain] = time.time() + cd
+def _get_domain_cdp_lock(domain: str) -> threading.Lock:
+    """Get or create a per-domain lock for CDP concurrency control."""
+    with _CDP_DOMAIN_LOCKS_GUARD:
+        if domain not in _CDP_DOMAIN_LOCKS:
+            _CDP_DOMAIN_LOCKS[domain] = threading.Lock()
+        return _CDP_DOMAIN_LOCKS[domain]
+
+
+def _cdp_result_cache_key(domain: str, url: str) -> str:
+    return f"{domain}|{url}"
+
+
+def _get_cached_cdp_result(domain: str, url: str) -> Optional[Dict[str, Any]]:
+    """Return a recent CDP result for this domain+URL if available."""
+    cache_key = _cdp_result_cache_key(domain, url)
+    with _CDP_DOMAIN_LOCKS_GUARD:
+        entry = _CDP_DOMAIN_RESULTS.get(cache_key)
+        if entry:
+            cached_at, result = entry
+            age = time.time() - cached_at
+            if age < CDP_RESULT_CACHE_SECONDS:
+                logger.info("CDP result cache hit for domain=%s url=%s (%.0fs old)", domain, url[:120], age)
+                return result
+            _CDP_DOMAIN_RESULTS.pop(cache_key, None)
+    return None
+
+
+def _cache_cdp_result(domain: str, url: str, result: Optional[Dict[str, Any]]) -> None:
+    """Cache a successful CDP result for short-term reuse."""
+    if result and result.get("price"):
+        cache_key = _cdp_result_cache_key(domain, url)
+        with _CDP_DOMAIN_LOCKS_GUARD:
+            _CDP_DOMAIN_RESULTS[cache_key] = (time.time(), result)
+
+
+class CooldownReason:
+    """Typed cooldown reasons with different durations."""
+
+    CAPTCHA = "captcha"
+    BLOCKED = "blocked"
+    INFRA_FAILURE = "infra_failure"
+    EXTRACTION_FAIL = "extraction_fail"
+    RATE_LIMITED = "rate_limited"
+
+
+_COOLDOWN_DURATIONS = {
+    CooldownReason.CAPTCHA: float(os.getenv("COOLDOWN_CAPTCHA_SECONDS", "1800")),
+    CooldownReason.BLOCKED: float(os.getenv("COOLDOWN_BLOCKED_SECONDS", "900")),
+    CooldownReason.INFRA_FAILURE: float(os.getenv("COOLDOWN_INFRA_SECONDS", "120")),
+    CooldownReason.EXTRACTION_FAIL: float(os.getenv("COOLDOWN_EXTRACTION_SECONDS", "300")),
+    CooldownReason.RATE_LIMITED: float(os.getenv("COOLDOWN_RATE_SECONDS", "60")),
+}
+
+_COOLDOWN_SEVERITY = [
+    CooldownReason.RATE_LIMITED,
+    CooldownReason.EXTRACTION_FAIL,
+    CooldownReason.INFRA_FAILURE,
+    CooldownReason.BLOCKED,
+    CooldownReason.CAPTCHA,
+]
+
+_DOMAIN_COOLDOWN: Dict[str, Tuple[float, str]] = {}
+_DOMAIN_COOLDOWN_LOCK = threading.Lock()
+
+
+def _mark_domain_cooldown(domain: str, reason: str, cooldown_seconds: Optional[float] = None) -> None:
+    """Mark a domain with a typed cooldown. Different reasons have different durations."""
+    cd = cooldown_seconds if cooldown_seconds is not None else _COOLDOWN_DURATIONS.get(reason, 300)
+    with _DOMAIN_COOLDOWN_LOCK:
+        existing = _DOMAIN_COOLDOWN.get(domain)
+        new_expiry = time.time() + cd
+        if existing:
+            existing_expiry, existing_reason = existing
+            if existing_expiry > time.time():
+                existing_sev = _COOLDOWN_SEVERITY.index(existing_reason) if existing_reason in _COOLDOWN_SEVERITY else 0
+                new_sev = _COOLDOWN_SEVERITY.index(reason) if reason in _COOLDOWN_SEVERITY else 0
+                if new_sev < existing_sev:
+                    return
+        _DOMAIN_COOLDOWN[domain] = (new_expiry, reason)
         logger.warning(
-            "Domain '%s' marked as CAPTCHA-blocked for %.0f seconds (until %s)",
+            "Domain '%s' cooldown set: reason=%s duration=%.0fs (until %s)",
             domain,
+            reason,
             cd,
-            datetime.datetime.fromtimestamp(time.time() + cd).strftime("%H:%M:%S"),
+            datetime.datetime.fromtimestamp(new_expiry).strftime("%H:%M:%S"),
         )
 
 
-def _is_domain_captcha_blocked(domain: str) -> bool:
-    """Check if a domain is still in CAPTCHA cooldown."""
-    with _CAPTCHA_COOLDOWN_LOCK:
-        expires = _CAPTCHA_COOLDOWN.get(domain, 0.0)
-        if time.time() < expires:
-            remaining = expires - time.time()
-            logger.info("Domain '%s' is CAPTCHA-blocked for %.0f more seconds", domain, remaining)
-            return True
-        _CAPTCHA_COOLDOWN.pop(domain, None)
+def _is_domain_cooled_down(domain: str) -> bool:
+    """Check if a domain is in any cooldown."""
+    with _DOMAIN_COOLDOWN_LOCK:
+        entry = _DOMAIN_COOLDOWN.get(domain)
+        if entry:
+            expires, reason = entry
+            if time.time() < expires:
+                remaining = expires - time.time()
+                logger.info("Domain '%s' is in cooldown: reason=%s, %.0fs remaining", domain, reason, remaining)
+                return True
+            _DOMAIN_COOLDOWN.pop(domain, None)
         return False
 
 
+def _get_domain_cooldown_info(domain: str) -> Optional[Tuple[float, str]]:
+    """Return (remaining_seconds, reason) or None if not in cooldown."""
+    with _DOMAIN_COOLDOWN_LOCK:
+        entry = _DOMAIN_COOLDOWN.get(domain)
+        if entry:
+            expires, reason = entry
+            remaining = expires - time.time()
+            if remaining > 0:
+                return (remaining, reason)
+            _DOMAIN_COOLDOWN.pop(domain, None)
+    return None
+
+
+# ── Backward compatibility aliases ──
+def _mark_domain_captcha_blocked(domain: str, cooldown_seconds: Optional[float] = None) -> None:
+    _mark_domain_cooldown(domain, CooldownReason.CAPTCHA, cooldown_seconds)
+
+
+def _is_domain_captcha_blocked(domain: str) -> bool:
+    return _is_domain_cooled_down(domain)
+
+
 def _get_captcha_cooldown_remaining(domain: str) -> float:
-    """Return seconds remaining in cooldown, or 0 if not blocked."""
-    with _CAPTCHA_COOLDOWN_LOCK:
-        expires = _CAPTCHA_COOLDOWN.get(domain, 0.0)
-        remaining = expires - time.time()
-        return max(0.0, remaining)
+    info = _get_domain_cooldown_info(domain)
+    return info[0] if info else 0.0
 
 
 def _mark_cdp_unhealthy(cooldown_seconds: float = 90.0) -> None:
@@ -3468,17 +3540,36 @@ def _get_cdp_proxy_list() -> List[Optional[dict]]:
     return proxies
 
 
+def _timezone_for_proxy(proxy_config: Optional[dict]) -> str:
+    """
+    Return a timezone consistent with the proxy's likely geography.
+    DataImpulse residential proxies rotate US IPs, so we use a broad US timezone.
+    When no proxy is used (Azure datacenter), use the ACI region's timezone.
+    """
+    if proxy_config is None:
+        # Direct datacenter IP — use ACI region timezone
+        aci_location = os.getenv("ACI_LOCATION", "eastus")
+        location_tz = {
+            "eastus": "America/New_York",
+            "eastus2": "America/New_York",
+            "centralus": "America/Chicago",
+            "westus": "America/Los_Angeles",
+            "westus2": "America/Los_Angeles",
+            "westus3": "America/Los_Angeles",
+            "southcentralus": "America/Chicago",
+            "northcentralus": "America/Chicago",
+        }
+        return location_tz.get(aci_location, "America/New_York")
+    # Residential proxy — DataImpulse/IPRoyal rotate US IPs.
+    # Use America/Chicago as a safe central US default.
+    return "America/Chicago"
+
+
 def _get_cdp_browser():
     """
-    Persistent CDP browser singleton — NOT currently used by _scrape_with_chrome_cdp().
-
-    Reserved for Azure multi-container deployment where Chrome runs as a separate
-    service and a long-lived shared connection (instead of per-request connections)
-    reduces overhead. When migrating:
-      1. Replace per-request pw/browser creation in _scrape_with_chrome_cdp with
-         calls to _get_cdp_browser()
-      2. Add reconnect-on-failure between is_connected() check and new_context()
-      3. Add connection health validation before returning cached browser
+    Persistent CDP browser singleton — used by _scrape_with_chrome_cdp() as the
+    primary browser acquisition path. Falls back to per-request connections if
+    the persistent browser is unavailable or disconnected.
 
     See also: _CDP_PLAYWRIGHT, _CDP_BROWSER, _CDP_BROWSER_LOCK
     """
@@ -5510,19 +5601,48 @@ def _scrape_with_chrome_cdp(
     """Scrape price using the remote Chrome container via CDP."""
     max_attempts = max_attempts_override if max_attempts_override is not None else int(os.getenv("SCRAPE_MAX_ATTEMPTS", "3"))
     scraped_domain = _get_domain(url)
-    if not skip_captcha_check and _is_domain_captcha_blocked(scraped_domain):
-        remaining = _get_captcha_cooldown_remaining(scraped_domain)
-        return {
-            "status": "captcha_blocked",
-            "error": (
-                f"CAPTCHA protection detected on {scraped_domain}. "
-                f"Use the browser extension to check this price. "
-                f"CDP will retry automatically in {int(remaining // 60)} minutes."
-            ),
-            "domain": scraped_domain,
-            "cooldown_remaining": remaining,
-            "source": "chrome_cdp",
-        }
+    if not skip_captcha_check:
+        cooldown_info = _get_domain_cooldown_info(scraped_domain)
+        if cooldown_info:
+            remaining, reason = cooldown_info
+            if reason == CooldownReason.CAPTCHA:
+                return {
+                    "status": "captcha_blocked",
+                    "error": (
+                        f"CAPTCHA protection detected on {scraped_domain}. "
+                        f"Use the browser extension to check this price. "
+                        f"CDP will retry automatically in {int(remaining // 60)} minutes."
+                    ),
+                    "domain": scraped_domain,
+                    "cooldown_remaining": remaining,
+                    "cooldown_reason": reason,
+                    "source": "chrome_cdp",
+                }
+            if reason == CooldownReason.BLOCKED:
+                return {
+                    "status": "bot_blocked",
+                    "error": (
+                        f"Access blocking was recently detected on {scraped_domain}. "
+                        f"Use the browser extension to check this price. "
+                        f"CDP will retry automatically in {int(remaining // 60)} minutes."
+                    ),
+                    "domain": scraped_domain,
+                    "cooldown_remaining": remaining,
+                    "cooldown_reason": reason,
+                    "source": "chrome_cdp",
+                }
+            return {
+                "status": "cooldown_blocked",
+                "error": (
+                    f"Chrome CDP is temporarily cooling down for {scraped_domain} "
+                    f"after a recent {reason.replace('_', ' ')} event. "
+                    f"Try again in {int(max(1, remaining // 60))} minutes."
+                ),
+                "domain": scraped_domain,
+                "cooldown_remaining": remaining,
+                "cooldown_reason": reason,
+                "source": "chrome_cdp",
+            }
     had_real_content = False
     had_captcha = False  # Track if any attempt hit CAPTCHA
     wall_deadline = time.time() + CDP_SCRAPE_MAX_WALL_SECONDS
@@ -5530,38 +5650,48 @@ def _scrape_with_chrome_cdp(
     pw = None
     browser = None
     shared_context = None
+    using_persistent_browser = False
     try:
-        try:
-            pw = sync_playwright().start()
-            if resolved_cdp_endpoint and resolved_cdp_endpoint[0]:
-                cdp_endpoint, cdp_headers = resolved_cdp_endpoint
-            else:
-                cached_endpoint = _get_cached_cdp_endpoint()
-                if cached_endpoint:
-                    cdp_endpoint, cdp_headers = cached_endpoint
+        # Try persistent browser first (faster, reuses connection)
+        browser = _get_cdp_browser()
+        if browser and browser.is_connected():
+            using_persistent_browser = True
+            logger.debug("Using persistent CDP browser connection")
+        else:
+            # Fallback to per-request connection
+            logger.debug("Persistent CDP browser unavailable, creating per-request connection")
+            using_persistent_browser = False
+            try:
+                pw = sync_playwright().start()
+                if resolved_cdp_endpoint and resolved_cdp_endpoint[0]:
+                    cdp_endpoint, cdp_headers = resolved_cdp_endpoint
                 else:
-                    cdp_endpoint, cdp_headers = _resolve_cdp_ws_endpoint(CHROME_CDP_URL, timeout_seconds=8.0)
-            if not cdp_endpoint:
-                logger.warning("CDP endpoint resolution failed for %s", CHROME_CDP_URL)
+                    cached_endpoint = _get_cached_cdp_endpoint()
+                    if cached_endpoint:
+                        cdp_endpoint, cdp_headers = cached_endpoint
+                    else:
+                        cdp_endpoint, cdp_headers = _resolve_cdp_ws_endpoint(CHROME_CDP_URL, timeout_seconds=8.0)
+                if not cdp_endpoint:
+                    logger.warning("CDP endpoint resolution failed for %s", CHROME_CDP_URL)
+                    return None
+                connect_kwargs = {"headers": cdp_headers} if cdp_headers else {}
+                browser = pw.chromium.connect_over_cdp(cdp_endpoint, **connect_kwargs)
+            except Exception as exc:
+                logger.warning("CDP per-request connect failed: %s", exc)
+                if pw:
+                    try:
+                        pw.stop()
+                    except Exception as stop_exc:
+                        logger.debug("Failed to stop Playwright after CDP connect failure: %s", stop_exc)
+                    pw = None
                 return None
-            connect_kwargs = {"headers": cdp_headers} if cdp_headers else {}
-            browser = pw.chromium.connect_over_cdp(cdp_endpoint, **connect_kwargs)
-        except Exception as exc:
-            logger.warning("CDP per-request connect failed: %s", exc)
-            if pw:
-                try:
-                    pw.stop()
-                except Exception as stop_exc:
-                    logger.debug("Failed to stop Playwright after CDP connect failure: %s", stop_exc)
-                pw = None
-            return None
 
         try:
             if not per_attempt_context:
                 _context_kwargs = dict(
                     viewport={"width": 1280, "height": 800},
                     locale="en-US",
-                    timezone_id=random.choice(_US_TIMEZONES),
+                    timezone_id=_timezone_for_proxy(proxy_config),
                     java_script_enabled=True,
                     user_agent=random.choice(USER_AGENTS),
                 )
@@ -5582,7 +5712,7 @@ def _scrape_with_chrome_cdp(
                         _context_kwargs = dict(
                             viewport={"width": 1280, "height": 800},
                             locale="en-US",
-                            timezone_id=random.choice(_US_TIMEZONES),
+                            timezone_id=_timezone_for_proxy(proxy_config),
                             java_script_enabled=True,
                             user_agent=random.choice(USER_AGENTS),
                         )
@@ -5792,18 +5922,22 @@ def _scrape_with_chrome_cdp(
     except Exception as exc:
         logger.warning("Chrome CDP scrape failed: %s", exc)
         _mark_cdp_unhealthy(15.0)
+        _mark_domain_cooldown(scraped_domain, CooldownReason.INFRA_FAILURE)
         return None
     finally:
-        try:
-            if browser:
-                browser.close()
-        except Exception as exc:
-            logger.debug("Failed to close CDP browser handle: %s", exc)
-        try:
-            if pw:
-                pw.stop()
-        except Exception as exc:
-            logger.debug("Failed to stop Playwright in CDP cleanup: %s", exc)
+        # Only close browser/pw if we created them for this request.
+        # Persistent browser is managed by _get_cdp_browser() lifecycle.
+        if not using_persistent_browser:
+            try:
+                if browser:
+                    browser.close()
+            except Exception as exc:
+                logger.debug("Failed to close CDP browser handle: %s", exc)
+            try:
+                if pw:
+                    pw.stop()
+            except Exception as exc:
+                logger.debug("Failed to stop Playwright in CDP cleanup: %s", exc)
 
 
 def _update_tracked_product_price(
@@ -6280,23 +6414,52 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
         logger.info("tier_skip tier=extension reason=unavailable domain=%s user=%s", scraped_hostname, caller_user_id)
 
     # Tier 4: Remote Chrome container via CDP (with on-demand ACI start)
-    if _is_domain_captcha_blocked(scraped_hostname):
-        remaining = _get_captcha_cooldown_remaining(scraped_hostname)
+    cooldown_info = _get_domain_cooldown_info(scraped_hostname)
+    if cooldown_info:
+        remaining, reason = cooldown_info
         logger.info(
-            "tier_skip tier=chrome_cdp reason=captcha_cooldown domain=%s user=%s remaining=%d",
+            "tier_skip tier=chrome_cdp reason=%s domain=%s user=%s remaining=%d",
+            reason,
             scraped_hostname,
             caller_user_id,
             int(remaining),
         )
+        if reason == CooldownReason.CAPTCHA:
+            return {
+                "status": "captcha_blocked",
+                "error": (
+                    f"CAPTCHA protection detected on {scraped_hostname}. "
+                    f"Use the browser extension to check this price. "
+                    f"CDP will retry automatically in {int(remaining // 60)} minutes."
+                ),
+                "domain": scraped_hostname,
+                "cooldown_remaining": remaining,
+                "cooldown_reason": reason,
+                "source": "chrome_cdp",
+            }
+        if reason == CooldownReason.BLOCKED:
+            return {
+                "status": "bot_blocked",
+                "error": (
+                    f"Access blocking was recently detected on {scraped_hostname}. "
+                    f"Use the browser extension to check this price. "
+                    f"CDP will retry automatically in {int(remaining // 60)} minutes."
+                ),
+                "domain": scraped_hostname,
+                "cooldown_remaining": remaining,
+                "cooldown_reason": reason,
+                "source": "chrome_cdp",
+            }
         return {
-            "status": "captcha_blocked",
+            "status": "cooldown_blocked",
             "error": (
-                f"CAPTCHA protection detected on {scraped_hostname}. "
-                f"Use the browser extension to check this price. "
-                f"CDP will retry automatically in {int(remaining // 60)} minutes."
+                f"Chrome CDP is temporarily cooling down for {scraped_hostname} "
+                f"after a recent {reason.replace('_', ' ')} event. "
+                f"Try again in {int(max(1, remaining // 60))} minutes."
             ),
             "domain": scraped_hostname,
             "cooldown_remaining": remaining,
+            "cooldown_reason": reason,
             "source": "chrome_cdp",
         }
 
@@ -6323,64 +6486,92 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
         cdp_result = None
         proxy_attempts = [3, 2, 1]
         try:
-            for proxy_idx, proxy_cfg in enumerate(proxy_list):
-                proxy_label = "direct" if proxy_cfg is None else ("primary_proxy" if proxy_idx == 0 else "fallback_proxy")
-                is_last_proxy = proxy_idx == len(proxy_list) - 1
-                attempts_for_this_proxy = proxy_attempts[proxy_idx] if proxy_idx < len(proxy_attempts) else 1
+            cached = _get_cached_cdp_result(scraped_hostname, product.url)
+            if cached and cached.get("price"):
+                logger.info("CDP using cached result for domain=%s", scraped_hostname)
+                cdp_result = cached
+            else:
+                domain_lock = _get_domain_cdp_lock(scraped_hostname)
+                lock_acquired = domain_lock.acquire(timeout=90)
+                if not lock_acquired:
+                    logger.warning("CDP domain lock timeout for domain=%s, proceeding without lock", scraped_hostname)
+
                 try:
-                    logger.info("CDP attempt with %s (%d max attempts) for domain=%s", proxy_label, attempts_for_this_proxy, scraped_hostname)
-                    cdp_result = _scrape_with_chrome_cdp(
-                        product.url,
-                        custom_selector=effective_selector,
-                        original_price_selector=effective_original_selector,
-                        resolved_cdp_endpoint=cached_cdp_endpoint,
-                        proxy_config=proxy_cfg,
-                        skip_captcha_check=True,
-                        max_attempts_override=attempts_for_this_proxy,
-                    )
-                    if cdp_result is not None:
-                        if cdp_result.get("price"):
-                            logger.info("CDP %s got price for domain=%s", proxy_label, scraped_hostname)
-                            break
-                        if cdp_result.get("status") in ("captcha_blocked", "bot_blocked"):
-                            if is_last_proxy:
+                    if lock_acquired:
+                        cached = _get_cached_cdp_result(scraped_hostname, product.url)
+                        if cached and cached.get("price"):
+                            logger.info("CDP cache hit after lock wait for domain=%s", scraped_hostname)
+                            cdp_result = cached
+
+                    if cdp_result is None:
+                        for proxy_idx, proxy_cfg in enumerate(proxy_list):
+                            proxy_label = "direct" if proxy_cfg is None else ("primary_proxy" if proxy_idx == 0 else "fallback_proxy")
+                            is_last_proxy = proxy_idx == len(proxy_list) - 1
+                            attempts_for_this_proxy = proxy_attempts[proxy_idx] if proxy_idx < len(proxy_attempts) else 1
+                            try:
+                                logger.info("CDP attempt with %s (%d max attempts) for domain=%s", proxy_label, attempts_for_this_proxy, scraped_hostname)
+                                cdp_result = _scrape_with_chrome_cdp(
+                                    product.url,
+                                    custom_selector=effective_selector,
+                                    original_price_selector=effective_original_selector,
+                                    resolved_cdp_endpoint=cached_cdp_endpoint,
+                                    proxy_config=proxy_cfg,
+                                    skip_captcha_check=True,
+                                    max_attempts_override=attempts_for_this_proxy,
+                                )
+                                if cdp_result is not None:
+                                    if cdp_result.get("price"):
+                                        logger.info("CDP %s got price for domain=%s", proxy_label, scraped_hostname)
+                                        break
+                                    if cdp_result.get("status") in ("captcha_blocked", "bot_blocked"):
+                                        if is_last_proxy:
+                                            logger.info(
+                                                "CDP %s blocked on domain=%s (final attempt, returning to user)",
+                                                proxy_label,
+                                                scraped_hostname,
+                                            )
+                                            break
+                                        logger.info("CDP %s blocked on domain=%s, trying next proxy", proxy_label, scraped_hostname)
+                                        continue
+                                    logger.info("CDP %s returned no price for domain=%s, trying next proxy", proxy_label, scraped_hostname)
+                                    continue
                                 logger.info(
-                                    "CDP %s blocked on domain=%s (final attempt, returning to user)",
+                                    "CDP %s returned None for domain=%s (possible proxy auth failure or timeout), trying next",
                                     proxy_label,
                                     scraped_hostname,
                                 )
-                                break
-                            logger.info("CDP %s blocked on domain=%s, trying next proxy", proxy_label, scraped_hostname)
-                            continue
-                        logger.info("CDP %s returned no price for domain=%s, trying next proxy", proxy_label, scraped_hostname)
-                        continue
-                    logger.info(
-                        "CDP %s returned None for domain=%s (possible proxy auth failure or timeout), trying next",
-                        proxy_label,
-                        scraped_hostname,
-                    )
-                except Exception as exc:
-                    logger.warning("CDP %s failed for domain=%s: %s", proxy_label, scraped_hostname, exc)
-                    if is_last_proxy:
-                        logger.warning("All CDP proxy attempts exhausted for domain=%s", scraped_hostname)
-                    continue
+                            except Exception as exc:
+                                logger.warning("CDP %s failed for domain=%s: %s", proxy_label, scraped_hostname, exc)
+                                if is_last_proxy:
+                                    logger.warning("All CDP proxy attempts exhausted for domain=%s", scraped_hostname)
+                                continue
+                finally:
+                    if lock_acquired:
+                        if cdp_result and cdp_result.get("price"):
+                            _cache_cdp_result(scraped_hostname, product.url, cdp_result)
+                        domain_lock.release()
             if cdp_result:
                 if cdp_result.get("status") in ("bot_blocked", "captcha_blocked"):
-                    _mark_domain_captcha_blocked(scraped_hostname)
+                    cooldown_reason = CooldownReason.BLOCKED if cdp_result.get("status") == "bot_blocked" else CooldownReason.CAPTCHA
+                    cooldown_seconds = _COOLDOWN_DURATIONS[cooldown_reason]
+                    _mark_domain_cooldown(scraped_hostname, cooldown_reason)
                     logger.info(
-                        "scrape_%s tier=%s domain=%s — all proxies failed, cooldown set for %d seconds",
-                        cdp_result["status"], "chrome_cdp", scraped_hostname, int(CAPTCHA_COOLDOWN_SECONDS),
+                        "scrape_captcha_blocked tier=chrome_cdp domain=%s reason=%s cooldown=%.0fs",
+                        scraped_hostname,
+                        cooldown_reason,
+                        cooldown_seconds,
                     )
                     return {
-                        "status": "captcha_blocked",
+                        "status": cdp_result["status"],
                         "error": (
-                            f"CAPTCHA protection detected on {scraped_hostname}. "
+                            f"{'CAPTCHA protection' if cooldown_reason == CooldownReason.CAPTCHA else 'Access blocking'} detected on {scraped_hostname}. "
                             f"All proxy attempts exhausted. "
                             f"Use the browser extension to check this price. "
-                            f"CDP will retry automatically in {int(CAPTCHA_COOLDOWN_SECONDS // 60)} minutes."
+                            f"CDP will retry automatically in {int(cooldown_seconds // 60)} minutes."
                         ),
                         "domain": scraped_hostname,
-                        "cooldown_remaining": CAPTCHA_COOLDOWN_SECONDS,
+                        "cooldown_remaining": cooldown_seconds,
+                        "cooldown_reason": cooldown_reason,
                         "source": "chrome_cdp",
                     }
                 if not cdp_result.get("selector_worked") and effective_selector:
@@ -6534,14 +6725,15 @@ def scrape_status(job_id: int, caller: User = Depends(get_current_user)):
 
 @app.get("/captcha-cooldowns")
 def get_captcha_cooldowns(user: User = Depends(get_current_user)):
-    """Show which domains are currently in CAPTCHA cooldown."""
-    with _CAPTCHA_COOLDOWN_LOCK:
+    """Show which domains are currently in CDP cooldown."""
+    with _DOMAIN_COOLDOWN_LOCK:
         now = time.time()
         active = {}
-        for domain, expires in _CAPTCHA_COOLDOWN.items():
+        for domain, (expires, reason) in _DOMAIN_COOLDOWN.items():
             remaining = expires - now
             if remaining > 0:
                 active[domain] = {
+                    "reason": reason,
                     "remaining_seconds": round(remaining),
                     "remaining_minutes": round(remaining / 60, 1),
                     "expires_at": datetime.datetime.fromtimestamp(expires).isoformat(),
@@ -6551,11 +6743,11 @@ def get_captcha_cooldowns(user: User = Depends(get_current_user)):
 
 @app.delete("/captcha-cooldowns/{domain}")
 def clear_captcha_cooldown(domain: str, user: User = Depends(get_current_user)):
-    """Manually clear CAPTCHA cooldown for a domain (e.g. after solving in browser)."""
-    with _CAPTCHA_COOLDOWN_LOCK:
-        removed = _CAPTCHA_COOLDOWN.pop(domain, None)
+    """Manually clear CDP cooldown for a domain (e.g. after solving in browser)."""
+    with _DOMAIN_COOLDOWN_LOCK:
+        removed = _DOMAIN_COOLDOWN.pop(domain, None)
     if removed:
-        logger.info("CAPTCHA cooldown manually cleared for domain: %s", domain)
+        logger.info("CDP cooldown manually cleared for domain: %s", domain)
         return {"ok": True, "message": f"Cooldown cleared for {domain}"}
     return {"ok": True, "message": f"No active cooldown for {domain}"}
 
