@@ -31,6 +31,7 @@ import os
 import random
 import re
 import secrets
+import string
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -3527,15 +3528,64 @@ def _parse_proxy_url(proxy_url: str) -> Optional[dict]:
     return config
 
 
-def _get_cdp_proxy_list() -> List[Optional[dict]]:
-    """Return ordered list of proxy configs to try."""
-    proxies = []
-    primary = _parse_proxy_url(CDP_PROXY_PRIMARY_URL)
-    if primary:
-        proxies.append(primary)
-    fallback = _parse_proxy_url(CDP_PROXY_FALLBACK_URL)
-    if fallback:
-        proxies.append(fallback)
+def _make_sticky_proxy_config(proxy_url: str) -> Optional[dict]:
+    """
+    Parse a proxy URL and inject a fresh sticky session for this context.
+
+    DataImpulse: Uses port-based sticky sessions.
+      - Port 823 = rotating per request (current default)
+      - Ports 10000-20000 = sticky (same IP for 30 min)
+      - We pick a random port in that range per context.
+
+    IPRoyal: Uses password-based sticky sessions.
+      - Append _session-<random>_lifetime-5m to the password.
+      - Each context gets a unique session ID = unique sticky IP.
+
+    Unknown providers: Fall through to standard parse (no sticky).
+    """
+    raw = (proxy_url or "").strip()
+    if not raw:
+        return None
+    parsed = urlparse(raw)
+    if not parsed.hostname or not parsed.port:
+        return None
+
+    hostname = parsed.hostname.lower()
+    session_id = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
+
+    if "dataimpulse" in hostname:
+        sticky_port = random.randint(10000, 20000)
+        config = {"server": f"{parsed.scheme}://{parsed.hostname}:{sticky_port}"}
+        if parsed.username:
+            config["username"] = parsed.username
+        if parsed.password:
+            config["password"] = parsed.password
+        logger.debug("DataImpulse sticky session: port=%d session=%s", sticky_port, session_id)
+        return config
+
+    if "iproyal" in hostname:
+        config = {"server": f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"}
+        if parsed.username:
+            config["username"] = parsed.username
+        if parsed.password:
+            config["password"] = f"{parsed.password}_session-{session_id}_lifetime-5m"
+        logger.debug("IPRoyal sticky session: id=%s", session_id)
+        return config
+
+    return _parse_proxy_url(proxy_url)
+
+
+def _get_cdp_proxy_list() -> List[Optional[str]]:
+    """
+    Return ordered list of proxy URL strings to try.
+    Returns raw URLs (not parsed configs) so that each attempt
+    can generate a fresh sticky session from the URL.
+    """
+    proxies: List[Optional[str]] = []
+    if CDP_PROXY_PRIMARY_URL and CDP_PROXY_PRIMARY_URL.strip():
+        proxies.append(CDP_PROXY_PRIMARY_URL.strip())
+    if CDP_PROXY_FALLBACK_URL and CDP_PROXY_FALLBACK_URL.strip():
+        proxies.append(CDP_PROXY_FALLBACK_URL.strip())
     proxies.append(None)
     return proxies
 
@@ -5595,6 +5645,7 @@ def _scrape_with_chrome_cdp(
     original_price_selector: Optional[str] = None,
     resolved_cdp_endpoint: Optional[Tuple[str, Dict[str, str]]] = None,
     proxy_config: Optional[dict] = None,
+    proxy_url: Optional[str] = None,
     skip_captcha_check: bool = False,
     max_attempts_override: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
@@ -5709,15 +5760,17 @@ def _scrape_with_chrome_cdp(
                 # If new_context() fails, context remains None and finally-block skips close.
                 if per_attempt_context:
                     try:
+                        # For per-attempt contexts, generate a fresh sticky session per attempt.
+                        attempt_proxy = _make_sticky_proxy_config(proxy_url) if proxy_url else proxy_config
                         _context_kwargs = dict(
                             viewport={"width": 1280, "height": 800},
                             locale="en-US",
-                            timezone_id=_timezone_for_proxy(proxy_config),
+                            timezone_id=_timezone_for_proxy(attempt_proxy),
                             java_script_enabled=True,
                             user_agent=random.choice(USER_AGENTS),
                         )
-                        if proxy_config:
-                            _context_kwargs["proxy"] = proxy_config
+                        if attempt_proxy:
+                            _context_kwargs["proxy"] = attempt_proxy
                         context = browser.new_context(**_context_kwargs)
                     except Exception as exc:
                         logger.debug("CDP context creation failed on attempt %d: %s", attempt + 1, exc)
@@ -6515,7 +6568,8 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                                     custom_selector=effective_selector,
                                     original_price_selector=effective_original_selector,
                                     resolved_cdp_endpoint=cached_cdp_endpoint,
-                                    proxy_config=proxy_cfg,
+                                    proxy_config=_make_sticky_proxy_config(proxy_cfg) if proxy_cfg else None,
+                                    proxy_url=proxy_cfg,
                                     skip_captcha_check=True,
                                     max_attempts_override=attempts_for_this_proxy,
                                 )
