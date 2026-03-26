@@ -2,6 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!-- SEO -->
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="https://traker.azurewebsites.net/" />
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="Traker - Price Tracker" />
+    <meta property="og:description" content="Track product prices and get notified when they drop" />
+    <meta property="og:url" content="https://traker.azurewebsites.net/" />
+    <meta property="og:type" content="website" />
     <script>
       (function() {
         var theme = localStorage.getItem('traker_theme');
@@ -40,6 +49,10 @@
   </head>
   <body>
     <div id="root"></div>
+    <noscript>
+      <h1>Traker - Price Tracker</h1>
+      <p>Track product prices and get notified when they drop.</p>
+    </noscript>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
