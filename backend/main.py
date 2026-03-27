@@ -588,10 +588,9 @@ HTTP_FIRST_HEADERS = {
     "Cache-Control": "max-age=0",
 }
 USER_AGENTS = [
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.153 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.153 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.153 Safari/537.36",
 ]
 HTTP_FIRST_TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0)
 HTTP_FIRST_CLIENT_HTTP2 = httpx.Client(
@@ -5388,11 +5387,9 @@ def _scrape_with_chrome_cdp(
         try:
             if not per_attempt_context:
                 _context_kwargs = dict(
-                    viewport={"width": 1280, "height": 800},
                     locale="en-US",
                     timezone_id=_timezone_for_proxy(proxy_config),
                     java_script_enabled=True,
-                    user_agent=random.choice(USER_AGENTS),
                 )
                 if proxy_config:
                     _context_kwargs["proxy"] = proxy_config
@@ -5411,11 +5408,9 @@ def _scrape_with_chrome_cdp(
                         # For per-attempt contexts, generate a fresh sticky session per attempt.
                         attempt_proxy = _make_sticky_proxy_config(proxy_url) if proxy_url else proxy_config
                         _context_kwargs = dict(
-                            viewport={"width": 1280, "height": 800},
                             locale="en-US",
                             timezone_id=_timezone_for_proxy(attempt_proxy),
                             java_script_enabled=True,
-                            user_agent=random.choice(USER_AGENTS),
                         )
                         if attempt_proxy:
                             _context_kwargs["proxy"] = attempt_proxy
