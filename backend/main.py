@@ -1107,6 +1107,7 @@ class TrackedProduct(Base):
     last_checked = Column(DateTime, nullable=True)
     ui_changed = Column(Boolean, default=False)
     selector_fail_count = Column(Integer, default=0, nullable=False)
+    selector_fallback_count = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     __table_args__ = (
         Index("ix_tracked_products_user_host", "user_id", "normalized_host"),
@@ -2597,6 +2598,8 @@ def _ensure_schema_columns():
                 conn.execute(text("ALTER TABLE tracked_products ADD COLUMN site_name VARCHAR"))
             if "tracked_products" in table_names and "selector_fail_count" not in tracked_columns:
                 conn.execute(text("ALTER TABLE tracked_products ADD COLUMN selector_fail_count INTEGER DEFAULT 0"))
+            if "tracked_products" in table_names and "selector_fallback_count" not in tracked_columns:
+                conn.execute(text("ALTER TABLE tracked_products ADD COLUMN selector_fallback_count INTEGER DEFAULT 0"))
 
             if "extension_jobs" in table_names and "user_id" not in ext_job_columns:
                 conn.execute(text("ALTER TABLE extension_jobs ADD COLUMN user_id VARCHAR"))
@@ -2791,6 +2794,43 @@ def _set_ui_changed_for_url(url: str, is_changed: bool, user_id: Optional[str] =
             db.commit()
     except SQLAlchemyError as exc:
         logger.exception("Failed updating ui_changed for %s: %s", url, exc)
+
+
+def _track_selector_drift(
+    url: str,
+    user_id: Optional[str],
+    selector_worked: bool,
+    has_selector: bool,
+    tier: str,
+) -> None:
+    """Track consecutive selector fallbacks across any scrape tier."""
+    if not has_selector:
+        return
+
+    try:
+        with SessionLocal() as db:
+            tp = _find_tracked_product_by_url(db, url, user_id=user_id)
+            if not tp:
+                return
+
+            if not selector_worked:
+                tp.selector_fallback_count = (tp.selector_fallback_count or 0) + 1
+                if tp.selector_fallback_count >= 3:
+                    tp.ui_changed = True
+                    _set_ui_changed_for_url(url, True, user_id=user_id)
+                    logger.warning(
+                        "selector_drift_threshold tier=%s domain=%s user=%s fallback_count=%d — flagging ui_changed",
+                        tier,
+                        _get_domain(url),
+                        user_id,
+                        tp.selector_fallback_count,
+                    )
+                db.commit()
+            elif (tp.selector_fallback_count or 0) > 0:
+                tp.selector_fallback_count = 0
+                db.commit()
+    except Exception as exc:
+        logger.warning("Failed to track selector drift for %s: %s", url[:80], exc)
 
 
 def _upsert_selector_for_url(
@@ -5989,6 +6029,7 @@ def _update_tracked_product_price(
                 tp.last_checked = datetime.datetime.now(datetime.timezone.utc)
                 tp.ui_changed = False
                 tp.selector_fail_count = 0
+                tp.selector_fallback_count = 0
                 tp.currency_code = normalize_currency_code(currency_code or tp.currency_code or _guess_currency_code_from_url(url))
                 if product_name and product_name != "Unknown Product":
                     tp.product_name = product_name
@@ -6230,6 +6271,13 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                 user_id=caller_user_id,
                 site_name=site_name,
             )
+            _track_selector_drift(
+                product.url,
+                caller_user_id,
+                selector_worked=http_result.get("selector_worked", False),
+                has_selector=bool(effective_selector),
+                tier="http",
+            )
             logger.info("scrape_success tier=http domain=%s user=%s", scraped_hostname, caller_user_id)
 
             return _build_scrape_response(
@@ -6283,6 +6331,13 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                     currency_code=currency_code,
                     user_id=caller_user_id,
                     site_name=site_name,
+                )
+                _track_selector_drift(
+                    product.url,
+                    caller_user_id,
+                    selector_worked=http_proxy_result.get("selector_worked", False),
+                    has_selector=bool(effective_selector),
+                    tier="http_proxy",
                 )
                 logger.info("scrape_success tier=http_proxy domain=%s user=%s", scraped_hostname, caller_user_id)
                 return _build_scrape_response(
@@ -6492,6 +6547,13 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                             site_name=successful_site_name,
                         )
                         tier_name = "curl_cffi_proxy" if successful_via_proxy else "curl_cffi"
+                        _track_selector_drift(
+                            product.url,
+                            caller_user_id,
+                            selector_worked=extracted_prices.get("selector_worked", False),
+                            has_selector=bool(effective_selector),
+                            tier=tier_name,
+                        )
                         logger.info(
                             "scrape_success tier=%s profile=%s domain=%s user=%s",
                             tier_name,
@@ -6787,6 +6849,13 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                     currency_code=currency_code,
                     user_id=caller_user_id,
                     site_name=cdp_result.get("site_name"),
+                )
+                _track_selector_drift(
+                    product.url,
+                    caller_user_id,
+                    selector_worked=cdp_result.get("selector_worked", False),
+                    has_selector=bool(effective_selector),
+                    tier="chrome_cdp",
                 )
                 logger.info("scrape_success tier=chrome_cdp domain=%s user=%s", scraped_hostname, caller_user_id)
                 return _build_scrape_response(
@@ -7146,6 +7215,13 @@ def extension_job_complete(
             user_id=job_user_id,
             site_name=result_site_name,
         )
+        _track_selector_drift(
+            job_url,
+            job_user_id,
+            selector_worked=not bool(report.selector_fallback),
+            has_selector=bool(job_selector),
+            tier="extension_job",
+        )
         return {"ok": True, "status": "done"}
     except HTTPException:
         raise
@@ -7184,6 +7260,13 @@ def extension_price_report(report: ExtensionPriceReport, user: User = Depends(ge
         currency_code=currency_code,
         user_id=str(user.id),
         site_name=report.site_name,
+    )
+    _track_selector_drift(
+        report.url,
+        str(user.id),
+        selector_worked=not bool(report.selector_fallback),
+        has_selector=bool(report.selector),
+        tier="extension_report",
     )
     logger.info(
         "extension_report_success domain=%s user=%s",
@@ -7469,10 +7552,12 @@ def add_tracked_product(
                     existing.custom_selector = normalized_custom_selector
                     existing.ui_changed = False
                     existing.selector_fail_count = 0
+                    existing.selector_fallback_count = 0
                 if normalized_original_selector:
                     existing.original_price_selector = normalized_original_selector
                     existing.ui_changed = False
                     existing.selector_fail_count = 0
+                    existing.selector_fallback_count = 0
                 price_updated = False
                 if product.current_price is not None:
                     existing.current_price = product.current_price
@@ -7484,6 +7569,7 @@ def add_tracked_product(
                     existing.last_checked = datetime.datetime.now(datetime.timezone.utc)
                     existing.ui_changed = False
                     existing.selector_fail_count = 0
+                    existing.selector_fallback_count = 0
                 if product.currency_code is not None:
                     existing.currency_code = normalize_currency_code(product.currency_code)
                 if not existing.currency_code:
@@ -7523,6 +7609,7 @@ def add_tracked_product(
                     ),
                     ui_changed=False,
                     selector_fail_count=0,
+                    selector_fallback_count=0,
                 )
                 db.add(new_product)
                 if _normalize_selector_value(product.custom_selector) or _normalize_selector_value(product.original_price_selector):
@@ -7566,10 +7653,12 @@ def update_tracked_product(
                 existing.custom_selector = normalized_custom_selector
                 existing.ui_changed = False
                 existing.selector_fail_count = 0
+                existing.selector_fallback_count = 0
             if normalized_original_selector:
                 existing.original_price_selector = normalized_original_selector
                 existing.ui_changed = False
                 existing.selector_fail_count = 0
+                existing.selector_fallback_count = 0
             price_updated = False
             if product.current_price is not None:
                 existing.current_price = product.current_price
@@ -7581,6 +7670,7 @@ def update_tracked_product(
                 existing.last_checked = datetime.datetime.now(datetime.timezone.utc)
                 existing.ui_changed = False
                 existing.selector_fail_count = 0
+                existing.selector_fallback_count = 0
             if product.currency_code is not None:
                 existing.currency_code = normalize_currency_code(product.currency_code)
             if not existing.currency_code:
