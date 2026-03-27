@@ -84,7 +84,7 @@ SITE_SELECTORS = {
     # ── Original sites (improved) ─────────────────────────────────────────────
     'walmart.com':        {'price': ['[itemprop="price"]', '[data-automation-id="product-price"]', '[data-automation-id="price-price-amount"]', '.price-characteristic', '.w_iB3b', '[class*="PriceDisplay"]']},
     'amazon.com':         {'price': ['.a-price-whole', '.a-price .a-offscreen', '#priceblock_ourprice', '#priceblock_dealprice', '#priceblock_saleprice', '.a-color-price', '#corePrice_feature_div .a-price', '[data-a-color="price"] .a-offscreen']},
-    'target.com':         {'price': ['[data-test="product-price"]', '[data-test="current-price"]', 'span[data-test="price"]']},
+    'target.com':         {'price': ['[data-test="product-price"]', '[data-test="current-price"]', 'span[data-test="price"]', '[data-test="product-price"] span', '[data-test="product-price-sale"]']},
     'bestbuy.com':        {'price': ['.priceView-customer-price span', '.priceView-price-validate', '[data-testid="customer-price"] span']},
     'ebay.com':           {'price': ['#prcIsum', '.x-price-primary', '[itemprop="price"]', '.x-bin-price__content .x-price-primary', '#binPrice', '.vi-price .notranslate']},
     'costco.com':         {'price': ['[data-test="product-price"]', '.value', '.your-price .value', '[automation-id="productDetailSalePrice"]']},
@@ -559,27 +559,32 @@ OLD_PRICE_FRAGMENT_PATTERN = re.compile(
     r"[^\d\n]*(?:US\$|USD|EUR|GBP|JPY|INR|CAD|AUD|NZD|CHF|CNY|HKD|SGD|\$|€|£|¥|₹)?\s*[\d.,]+"
     r"(?:\s*(?:US\$|USD|EUR|GBP|JPY|INR|CAD|AUD|NZD|CHF|CNY|HKD|SGD|\$|€|£|¥|₹))?"
 )
-POSITIVE_PRICE_HINTS = ("price", "current", "now", "sale", "our", "buy")
-NEGATIVE_PRICE_HINTS = ("rating", "review", "sold", "save", "was", "unit", "count")
+POSITIVE_PRICE_HINTS = (
+    "price", "current", "now", "sale", "our", "buy",
+    "add to cart", "in stock", "subtotal", "deal", "member",
+)
+NEGATIVE_PRICE_HINTS = (
+    "rating", "review", "sold", "save", "was", "unit", "count",
+    "shipping", "delivery", "protection", "plan", "warranty",
+    "per month", "/mo", "installment", "monthly",
+    "affirm", "klarna", "afterpay", "zip pay",
+    "compare at", "msrp", "list price", "reg ",
+    "coupon", "promo", "rebate", "earn", "reward",
+    "star", "out of 5",
+)
 PERMANENT_ERROR_CODES = {400, 401, 403, 404, 410}
 # --- SCRAPER TIER TOGGLES (set to False to skip a tier during testing) ---
 ENABLE_TIER_1_HTTP = True   # httpx HTTP-first scraper
 ENABLE_TIER_2_CFFI = os.getenv("ENABLE_TIER_2_CFFI", "true").lower() in ("true", "1", "yes")   # curl_cffi TLS-impersonation scraper
 ENABLE_TIER_3_EXTENSION = True  # Extension-based scraping via job queue
-CFFI_IMPERSONATIONS = ["chrome", "safari", "chrome131", "chrome124"]
+CFFI_IMPERSONATIONS = ["chrome", "safari"]
 
-HTTP_FIRST_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (X11; Linux x86_64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-    ),
+_HTTP_FIRST_BASE_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
     "Accept-Language": "en-US,en;q=0.9",
     "Accept-Encoding": "gzip, deflate, br",
-    "Referer": "https://www.google.com/",
-    "sec-ch-ua": '"Chromium";v="131", "Not_A Brand";v="24", "Google Chrome";v="131"',
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": '"Linux"',
+    "DNT": "1",
+    "Connection": "keep-alive",
     "Sec-Fetch-Dest": "document",
     "Sec-Fetch-Mode": "navigate",
     "Sec-Fetch-Site": "cross-site",
@@ -587,21 +592,61 @@ HTTP_FIRST_HEADERS = {
     "Upgrade-Insecure-Requests": "1",
     "Cache-Control": "max-age=0",
 }
-USER_AGENTS = [
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.153 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.153 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.153 Safari/537.36",
+
+_CHROME_VERSION = "146"
+_CHROME_FULL_VERSION = "146.0.7680.153"
+_USER_AGENT_PROFILES = [
+    {
+        "User-Agent": f"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{_CHROME_FULL_VERSION} Safari/537.36",
+        "sec-ch-ua": f'"Chromium";v="{_CHROME_VERSION}", "Not_A Brand";v="24", "Google Chrome";v="{_CHROME_VERSION}"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Linux"',
+    },
+    {
+        "User-Agent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{_CHROME_FULL_VERSION} Safari/537.36",
+        "sec-ch-ua": f'"Chromium";v="{_CHROME_VERSION}", "Not_A Brand";v="24", "Google Chrome";v="{_CHROME_VERSION}"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+    },
+    {
+        "User-Agent": f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{_CHROME_FULL_VERSION} Safari/537.36",
+        "sec-ch-ua": f'"Chromium";v="{_CHROME_VERSION}", "Not_A Brand";v="24", "Google Chrome";v="{_CHROME_VERSION}"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"macOS"',
+    },
 ]
+
+
+def _build_http_first_headers(url: str = "") -> Dict[str, str]:
+    """Build a consistent set of headers with matching UA + client hints."""
+    headers = dict(_HTTP_FIRST_BASE_HEADERS)
+    profile = random.choice(_USER_AGENT_PROFILES)
+    headers.update(profile)
+    headers["Referer"] = _build_referer(url)
+    return headers
+
+
+def _build_referer(url: str) -> str:
+    """Build a realistic Referer for the target URL."""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}/"
+    except Exception:
+        pass
+    return "https://www.google.com/"
+
+
 HTTP_FIRST_TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0)
 HTTP_FIRST_CLIENT_HTTP2 = httpx.Client(
-    headers=HTTP_FIRST_HEADERS,
+    headers=_HTTP_FIRST_BASE_HEADERS,
     timeout=HTTP_FIRST_TIMEOUT,
     follow_redirects=True,
     http2=True,
     limits=httpx.Limits(max_connections=20, keepalive_expiry=30),
 )
 HTTP_FIRST_CLIENT_HTTP1 = httpx.Client(
-    headers=HTTP_FIRST_HEADERS,
+    headers=_HTTP_FIRST_BASE_HEADERS,
     timeout=HTTP_FIRST_TIMEOUT,
     follow_redirects=True,
     http2=False,
@@ -969,13 +1014,6 @@ def _extract_site_name_from_soup(soup: "BeautifulSoup", url: str) -> Optional[st
             if value and len(value) < 100:
                 return value
     return None
-
-
-def _extract_currency_code_from_html(html: str, url: str, *, soup: Optional["BeautifulSoup"] = None) -> str:
-    if soup is None:
-        soup = BeautifulSoup(html or "", "lxml")
-    return _extract_currency_code_from_soup(soup, url)
-
 
 def _extract_currency_code_from_page(page, url: str) -> str:
     selectors = [
@@ -1517,6 +1555,14 @@ def _best_price_candidate_from_text(
         if best is None or score > best[1]:
             best = (value, score)
 
+    # Penalize text containing multiple prices (e.g. "$279.99 reg $439.99").
+    # The extension applies -10 per extra price match.
+    if best is not None:
+        price_match_count = len(list(PRICE_PATTERN.finditer(text)))
+        if price_match_count > 1:
+            penalty = min(30, 10 * (price_match_count - 1))
+            best = (best[0], best[1] - penalty)
+
     return best
 
 
@@ -1617,7 +1663,16 @@ def _pick_best_candidate(candidates: List[Tuple[float, int]]) -> Optional[float]
     if not candidates:
         return None
     candidates.sort(key=lambda c: c[1], reverse=True)
-    return candidates[0][0]
+    top_score = candidates[0][1]
+    tied = [c for c in candidates if c[1] == top_score]
+    if len(tied) == 1:
+        return tied[0][0]
+    largest = max(c[0] for c in tied)
+    plausible = [(p, s) for p, s in tied if p >= largest * 0.1 and 1.0 <= p <= 100_000]
+    if plausible:
+        plausible.sort(key=lambda c: c[0], reverse=True)
+        return plausible[0][0]
+    return tied[0][0]
 
 
 def _is_offer_type(type_val: Any) -> bool:
@@ -1698,7 +1753,12 @@ def _price_candidates_from_ld_json(
                 currency_hint=currency_hint,
             )
             if direct_price is not None:
-                candidates.append((direct_price, 100))
+                offer_score = 100
+                if direct_price < 5.0:
+                    offer_score -= 30
+                elif direct_price < 20.0:
+                    offer_score -= 15
+                candidates.append((direct_price, offer_score))
 
         offers = item.get("offers")
         if isinstance(offers, dict) and _is_offer_type(offers.get("@type")):
@@ -1709,7 +1769,12 @@ def _price_candidates_from_ld_json(
                 currency_hint=currency_hint,
             )
             if direct_price is not None:
-                candidates.append((direct_price, 100))
+                offer_score = 100
+                if direct_price < 5.0:
+                    offer_score -= 30
+                elif direct_price < 20.0:
+                    offer_score -= 15
+                candidates.append((direct_price, offer_score))
         elif isinstance(offers, list):
             for offer in offers:
                 if isinstance(offer, dict) and _is_offer_type(offer.get("@type")):
@@ -1720,7 +1785,12 @@ def _price_candidates_from_ld_json(
                         currency_hint=currency_hint,
                     )
                     if direct_price is not None:
-                        candidates.append((direct_price, 100))
+                        offer_score = 100
+                        if direct_price < 5.0:
+                            offer_score -= 30
+                        elif direct_price < 20.0:
+                            offer_score -= 15
+                        candidates.append((direct_price, offer_score))
 
         if not offer_checked:
             candidates.extend(
@@ -1772,11 +1842,6 @@ def split_safe_selectors(selector_str: str) -> List[str]:
 
     return parts
 
-
-def _split_selectors(selector: str) -> List[str]:
-    return split_safe_selectors(selector)
-
-
 def _looks_blocked_html(html: str) -> bool:
     t = (html or "").lower()
     return any(marker in t for marker in _BLOCKED_PAGE_MARKERS)
@@ -1794,7 +1859,7 @@ def _extract_with_custom_selector_from_soup(
     if not normalized_selector:
         return None
 
-    for sel in _split_selectors(normalized_selector):
+    for sel in split_safe_selectors(normalized_selector):
         parts: List[str] = []
         nodes = []
 
@@ -1992,6 +2057,18 @@ def _extract_fallback_price_from_soup(
                     if attr_best:
                         candidates.append(attr_best)
 
+    # Tier 3b: Penalize strikethrough (was/original) prices
+    for strike_sel in ["del", "s", "strike", "[style*='line-through']"]:
+        for node in soup.select(strike_sel)[:3]:
+            txt = node.get_text(" ", strip=True)
+            best = _best_price_candidate_from_text(
+                txt,
+                base_score=10,
+                locale_hint=locale_hint,
+                currency_hint=currency_hint,
+            )
+            if best:
+                candidates.append((best[0], max(best[1] - 40, 1)))
 
     # Tier 4: Sliding-window body text fallback
     if not candidates:
@@ -2018,7 +2095,200 @@ def _extract_fallback_price_from_soup(
             if body_best:
                 candidates.append(body_best)
 
-    return _pick_best_candidate(_dedupe_candidates(candidates))
+    deduped = _dedupe_candidates(candidates)
+    if len(deduped) >= 3:
+        prices_only = sorted([c[0] for c in deduped])
+        median_price = prices_only[len(prices_only) // 2]
+        if median_price > 10.0:
+            filtered = [(p, s) for p, s in deduped if p >= median_price * 0.1]
+            if filtered:
+                deduped = filtered
+    if deduped:
+        top_3 = sorted(deduped, key=lambda c: c[1], reverse=True)[:3]
+        logger.info("Price candidates (top 3): %s", [(round(p, 2), s) for p, s in top_3])
+    best_candidate = _pick_best_candidate(deduped)
+    if best_candidate is not None:
+        best_score = max(s for p, s in deduped if abs(p - best_candidate) < 0.01)
+        if best_score < 40:
+            logger.info(
+                "Fallback price %.2f rejected: score %d below quality threshold 40",
+                best_candidate,
+                best_score,
+            )
+            return None
+    return best_candidate
+
+
+def _extract_fallback_original_price(
+    soup: "BeautifulSoup",
+    url: str,
+    sale_price: Optional[float] = None,
+    *,
+    locale_hint: str = "",
+    currency_hint: str = "",
+) -> Optional[float]:
+    """Extract the original/list/regular price when no selector is available.
+
+    Only returns a value when there is clear evidence of a sale to prevent
+    non-sale products from getting a spurious original_price.
+    """
+    candidates: List[Tuple[float, int]] = []
+    has_sale_evidence = False
+
+    # 1. Meta tag: product:sale_price:amount is definitive sale evidence
+    sale_meta = soup.select_one('meta[property="product:sale_price:amount"]')
+    if sale_meta and sale_meta.get("content"):
+        has_sale_evidence = True
+        for sel in ['meta[property="product:price:amount"]', 'meta[property="og:price:amount"]']:
+            node = soup.select_one(sel)
+            if node and node.get("content"):
+                p = _normalize_price(
+                    node["content"],
+                    context=sel,
+                    locale_hint=locale_hint,
+                    currency_hint=currency_hint,
+                )
+                if p is not None and (sale_price is None or p > sale_price):
+                    candidates.append((p, 95))
+
+    # 2. JSON-LD: look for listPrice on Offer objects
+    pre_count = len(candidates)
+    for script in soup.select('script[type="application/ld+json"]'):
+        raw = (script.string or script.get_text() or "").strip()
+        if not raw:
+            continue
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            continue
+        _find_list_prices(
+            parsed,
+            candidates,
+            sale_price=sale_price,
+            locale_hint=locale_hint,
+            currency_hint=currency_hint,
+        )
+    if len(candidates) > pre_count:
+        has_sale_evidence = True
+
+    # 3. Strikethrough elements — "was" prices
+    for strike_sel in ["del", "s", "strike"]:
+        for node in soup.select(strike_sel)[:3]:
+            txt = node.get_text(" ", strip=True)
+            best = _best_price_candidate_from_text(
+                txt,
+                base_score=85,
+                locale_hint=locale_hint,
+                currency_hint=currency_hint,
+                is_original_mode=True,
+            )
+            if best and (sale_price is None or best[0] > sale_price):
+                candidates.append(best)
+                has_sale_evidence = True
+
+    # 4. DOM elements with "was"/"original"/"reg" context
+    original_selectors = {
+        '[data-test*="original" i]': 88,
+        '[data-test*="regular" i]': 88,
+        '[class*="original-price" i]': 85,
+        '[class*="was-price" i]': 85,
+        '[class*="regular-price" i]': 85,
+        '[class*="list-price" i]': 85,
+        '[class*="compareAt" i]': 85,
+    }
+    for sel, base_score in original_selectors.items():
+        for node in soup.select(sel)[:3]:
+            txt = node.get_text(" ", strip=True)
+            best = _best_price_candidate_from_text(
+                txt,
+                base_score=base_score,
+                locale_hint=locale_hint,
+                currency_hint=currency_hint,
+                is_original_mode=True,
+            )
+            if best and (sale_price is None or best[0] > sale_price):
+                candidates.append(best)
+                has_sale_evidence = True
+
+    if not candidates or not has_sale_evidence:
+        return None
+
+    if sale_price is not None:
+        candidates = [(p, s) for p, s in candidates if p > sale_price * 1.01]
+
+    deduped = _dedupe_candidates(candidates)
+    return _pick_best_candidate(deduped)
+
+
+def _find_list_prices(
+    node: Any,
+    candidates: List[Tuple[float, int]],
+    *,
+    sale_price: Optional[float] = None,
+    locale_hint: str = "",
+    currency_hint: str = "",
+    depth: int = 0,
+) -> None:
+    """Recursively find listPrice / highPrice values in JSON-LD Offer objects."""
+    if depth > 8 or node is None:
+        return
+    if isinstance(node, list):
+        for item in node:
+            _find_list_prices(
+                item,
+                candidates,
+                sale_price=sale_price,
+                locale_hint=locale_hint,
+                currency_hint=currency_hint,
+                depth=depth + 1,
+            )
+        return
+    if not isinstance(node, dict):
+        return
+
+    type_val = node.get("@type", "")
+    if isinstance(type_val, list):
+        type_val = " ".join(type_val)
+
+    is_offer = bool(re.search(r"\b(?:Offer|AggregateOffer|Product)\b", str(type_val)))
+
+    if is_offer:
+        for key in ("listPrice", "highPrice"):
+            raw = node.get(key)
+            if raw is not None:
+                p = _normalize_price(
+                    str(raw),
+                    context=key,
+                    locale_hint=locale_hint,
+                    currency_hint=currency_hint,
+                )
+                if p is not None and (sale_price is None or p > sale_price):
+                    candidates.append((p, 92))
+
+        price_spec = node.get("priceSpecification")
+        if isinstance(price_spec, dict):
+            for key in ("price", "listPrice"):
+                raw = price_spec.get(key)
+                if raw is not None:
+                    p = _normalize_price(
+                        str(raw),
+                        context=f"priceSpecification.{key}",
+                        locale_hint=locale_hint,
+                        currency_hint=currency_hint,
+                    )
+                    if p is not None and (sale_price is None or p > sale_price):
+                        candidates.append((p, 90))
+
+    for value in node.values():
+        if isinstance(value, (dict, list)):
+            _find_list_prices(
+                value,
+                candidates,
+                sale_price=sale_price,
+                locale_hint=locale_hint,
+                currency_hint=currency_hint,
+                depth=depth + 1,
+            )
 
 
 def _extract_prices_from_html(
@@ -2063,30 +2333,29 @@ def _extract_prices_from_html(
             currency_hint=currency_hint,
         )
 
+    if original_price is None and price is not None:
+        original_price = _extract_fallback_original_price(
+            soup,
+            url,
+            sale_price=price,
+            locale_hint=locale_hint,
+            currency_hint=currency_hint,
+        )
+
+    if original_price is not None and price is not None:
+        if original_price <= price * 1.01:
+            original_price = None
+
     return {"price": price, "original_price": original_price, "selector_worked": selector_worked}
-
-
-def _extract_price_from_html(
-    html: str,
-    url: str,
-    custom_selector: Optional[str] = None,
-    *,
-    soup: Optional["BeautifulSoup"] = None,
-) -> Optional[float]:
-    return _extract_prices_from_html(
-        html,
-        url,
-        custom_selector=custom_selector,
-        soup=soup,
-    )["price"]
-
 
 def try_http_first(
     url: str,
     custom_selector: Optional[str] = None,
     original_price_selector: Optional[str] = None,
+    *,
+    proxy_url: Optional[str] = None,
 ) -> Dict[str, Any]:
-    max_attempts = int(os.getenv("HTTP_FIRST_MAX_ATTEMPTS", "3"))
+    max_attempts = 1 if proxy_url else int(os.getenv("HTTP_FIRST_MAX_ATTEMPTS", "3"))
     transient_codes = {429, 500, 502, 503, 504}
     host = (urlparse(url).hostname or "").lower()
     use_http2 = host not in HTTP1_DOMAINS
@@ -2095,10 +2364,33 @@ def try_http_first(
         last_reason = "unknown"
         for attempt in range(max_attempts):
             try:
-                attempt_headers = dict(HTTP_FIRST_HEADERS)
-                attempt_headers["User-Agent"] = random.choice(USER_AGENTS)
-                client = HTTP_FIRST_CLIENT_HTTP2 if use_http2 else HTTP_FIRST_CLIENT_HTTP1
-                response = client.get(url, headers=attempt_headers)
+                attempt_headers = _build_http_first_headers(url)
+                if proxy_url:
+                    proxy_client = None
+                    try:
+                        proxy_client = httpx.Client(
+                            proxy=proxy_url,
+                            headers=_HTTP_FIRST_BASE_HEADERS,
+                            timeout=HTTP_FIRST_TIMEOUT,
+                            follow_redirects=True,
+                            http2=use_http2,
+                        )
+                        response = proxy_client.get(url, headers=attempt_headers)
+                    except httpx.HTTPError as exc:
+                        last_reason = f"HTTP-first proxy error: {exc}"
+                        if attempt < max_attempts - 1:
+                            _retry_sleep(attempt)
+                            continue
+                        return {"ok": False, "reason": last_reason}
+                    finally:
+                        if proxy_client:
+                            try:
+                                proxy_client.close()
+                            except Exception:
+                                pass
+                else:
+                    client = HTTP_FIRST_CLIENT_HTTP2 if use_http2 else HTTP_FIRST_CLIENT_HTTP1
+                    response = client.get(url, headers=attempt_headers)
             except httpx.HTTPError as exc:
                 last_reason = f"HTTP-first network error: {exc}"
                 if attempt < max_attempts - 1:
@@ -2107,6 +2399,22 @@ def try_http_first(
                 return {"ok": False, "reason": last_reason}
 
             html = response.text or ""
+            final_url = str(response.url)
+            if final_url != url:
+                blocked_paths = (
+                    "/blocked", "/login", "/signin", "/captcha", "/challenge",
+                    "/access-denied", "/errors/", "/bot", "/security",
+                )
+                if any(bp in final_url.lower() for bp in blocked_paths):
+                    return {"ok": False, "reason": f"Redirected to blocked page: {final_url[:120]}"}
+
+            if len(html) < 500:
+                last_reason = f"Response too small ({len(html)} bytes)"
+                if attempt < max_attempts - 1:
+                    _retry_sleep(attempt)
+                    continue
+                return {"ok": False, "reason": last_reason}
+
             status_code = response.status_code
 
             if status_code in PERMANENT_ERROR_CODES:
@@ -2124,6 +2432,12 @@ def try_http_first(
 
             if _looks_blocked_html(html):
                 return {"ok": False, "reason": "Blocked/challenge HTML detected"}
+
+            quick_title_match = re.search(r"<title[^>]*>(.*?)</title>", html[:3000], re.IGNORECASE | re.DOTALL)
+            if quick_title_match:
+                title_text = quick_title_match.group(1).strip().lower()
+                if any(marker in title_text for marker in _BOT_TITLE_MARKERS):
+                    return {"ok": False, "reason": f"Bot challenge title detected: {title_text[:60]}"}
 
             soup = BeautifulSoup(html, "lxml")
             title = (soup.title.get_text(strip=True) if soup.title else "") or "Unknown Product"
@@ -2192,6 +2506,21 @@ def _extract_prices_from_page(
     needs_price_html = price is None
     needs_original_html = normalized_original_selector is not None and original_price is None
     if not needs_price_html and not needs_original_html:
+        if original_price is None and price is not None and normalized_original_selector is None:
+            try:
+                html = page.content()
+                soup = BeautifulSoup(html, "lxml")
+                original_price = _extract_fallback_original_price(
+                    soup,
+                    url,
+                    sale_price=price,
+                    locale_hint=_guess_locale_hint_from_url(url),
+                    currency_hint=_guess_currency_code_from_url(url),
+                )
+                if original_price is not None and original_price <= price * 1.01:
+                    original_price = None
+            except Exception:
+                pass
         return {"price": price, "original_price": original_price, "selector_worked": True}
 
     try:
@@ -2588,10 +2917,16 @@ _CAPTCHA_TEXT_MARKERS = [
     "please verify you are a human", "checking if the site connection is secure",
     "please stand by", "performing a security check",
     "perimeterx", "px-captcha",
+    "just a moment", "checking your browser",
+    "attention required", "enable javascript and cookies",
+    "access to this page has been denied",
+    "unusual traffic from your computer",
 ]
 _BLOCKED_TEXT_MARKERS = [
     "sorry, you have been blocked", "blocked your ip",
     "your ip address has been blocked", "this request was blocked",
+    "access denied", "forbidden",
+    "please enable cookies", "browser is not supported",
 ]
 _BLOCKED_PAGE_MARKERS = _CAPTCHA_TEXT_MARKERS + _BLOCKED_TEXT_MARKERS
 
@@ -4096,7 +4431,7 @@ def _iter_exact_iframe_targets(page, selector_groups: List[str], max_per_selecto
     targets: List[Dict[str, Any]] = []
     seen = set()
     for group in selector_groups:
-        for selector in _split_selectors(group):
+        for selector in split_safe_selectors(group):
             if not selector:
                 continue
             try:
@@ -5908,6 +6243,60 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                 site_name=site_name,
             )
 
+        if CDP_PROXY_PRIMARY_URL and CDP_PROXY_PRIMARY_URL.strip():
+            logger.info("tier_retry tier=http_proxy reason=%s domain=%s", http_result.get("reason"), scraped_hostname)
+            http_proxy_result = try_http_first(
+                product.url,
+                custom_selector=effective_selector,
+                original_price_selector=effective_original_selector,
+                proxy_url=CDP_PROXY_PRIMARY_URL,
+            )
+            if http_proxy_result.get("ok"):
+                if not http_proxy_result.get("selector_worked") and http_proxy_result.get("price") is not None and effective_selector:
+                    logger.warning(
+                        "scrape_selector_drift tier=http_proxy domain=%s user=%s",
+                        scraped_hostname, caller_user_id,
+                    )
+                name = http_proxy_result["name"]
+                site_name = http_proxy_result.get("site_name")
+                final_price = float(http_proxy_result["price"])
+                original_price = http_proxy_result.get("original_price")
+                currency_code = normalize_currency_code(
+                    http_proxy_result.get("currency_code") or _guess_currency_code_from_url(product.url)
+                )
+                _save_price_history(
+                    product_name=name,
+                    url=product.url,
+                    price=final_price,
+                    original_price=original_price,
+                    currency_code=currency_code,
+                    custom_selector=effective_selector,
+                    original_price_selector=effective_original_selector,
+                    ui_changed=False,
+                    user_id=caller_user_id,
+                )
+                _update_tracked_product_price(
+                    product.url,
+                    final_price,
+                    original_price,
+                    name,
+                    currency_code=currency_code,
+                    user_id=caller_user_id,
+                    site_name=site_name,
+                )
+                logger.info("scrape_success tier=http_proxy domain=%s user=%s", scraped_hostname, caller_user_id)
+                return _build_scrape_response(
+                    name,
+                    final_price,
+                    currency_code,
+                    effective_selector,
+                    "http_proxy",
+                    original_price=original_price,
+                    original_price_selector=effective_original_selector,
+                    site_name=site_name,
+                )
+            logger.info("HTTP-first proxy also failed. Reason: %s", http_proxy_result.get("reason"))
+
         logger.info("HTTP-first failed; trying curl_cffi. Reason: %s", http_result.get("reason"))
     else:
         logger.info("tier_skip tier=http reason=disabled domain=%s user=%s", scraped_hostname, caller_user_id)
@@ -5915,8 +6304,12 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
     # Tier 2: curl_cffi with Chrome TLS impersonation (fast, no browser)
     if ENABLE_TIER_2_CFFI and cffi_requests:
         cffi_headers = {
-            "Referer": "https://www.google.com/",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Referer": _build_referer(product.url),
+            "DNT": "1",
+            "Connection": "keep-alive",
             "Sec-Fetch-Dest": "document",
             "Sec-Fetch-Mode": "navigate",
             "Sec-Fetch-Site": "cross-site",
@@ -5934,7 +6327,12 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                 successful_soup: Optional["BeautifulSoup"] = None
                 successful_title: str = "Unknown Product"
                 successful_site_name: Optional[str] = None
+                successful_via_proxy = False
+                successful_profile: Optional[str] = None
                 for profile in CFFI_IMPERSONATIONS:
+                    # Small random delay between profile attempts to avoid burst detection.
+                    if profile != CFFI_IMPERSONATIONS[0]:
+                        time.sleep(random.uniform(0.5, 1.5))
                     try:
                         cffi_session = cffi_sessions.get(profile)
                         if cffi_session is None:
@@ -5959,15 +6357,102 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                         continue
 
                     html = cffi_resp.text or ""
+                    final_url = str(cffi_resp.url) if hasattr(cffi_resp, "url") else ""
+                    if final_url:
+                        blocked_paths = (
+                            "/blocked", "/login", "/signin", "/captcha", "/challenge",
+                            "/access-denied", "/errors/", "/bot", "/security",
+                        )
+                        if any(bp in final_url.lower() for bp in blocked_paths):
+                            continue
                     if _looks_blocked_html(html):
+                        continue
+                    if len(html) < 500:
                         continue
 
                     logger.info("curl_cffi succeeded with profile %s on attempt %d", profile, attempt + 1)
                     successful_html = html
                     successful_soup = BeautifulSoup(html, "lxml")
                     successful_title = (successful_soup.title.get_text(strip=True) if successful_soup.title else "") or "Unknown Product"
+                    successful_profile = profile
+                    if any(marker in successful_title.lower() for marker in _BOT_TITLE_MARKERS):
+                        logger.warning(
+                            "curl_cffi bot challenge title detected for %s (profile=%s): %s",
+                            product.url, profile, successful_title[:60],
+                        )
+                        successful_html = None
+                        successful_soup = None
+                        successful_site_name = None
+                        successful_profile = None
+                        continue
                     successful_site_name = _extract_site_name_from_soup(successful_soup, product.url)
                     break
+
+                if successful_html is None and CDP_PROXY_PRIMARY_URL and CDP_PROXY_PRIMARY_URL.strip():
+                    logger.info("curl_cffi datacenter failed; retrying with residential proxy (attempt %d)", attempt + 1)
+                    for profile in CFFI_IMPERSONATIONS:
+                        if profile != CFFI_IMPERSONATIONS[0]:
+                            time.sleep(random.uniform(0.5, 1.5))
+                        proxy_session = None
+                        try:
+                            proxy_session = cffi_requests.Session()
+                            cffi_resp = proxy_session.get(
+                                product.url,
+                                impersonate=profile,
+                                headers=cffi_headers,
+                                proxy=CDP_PROXY_PRIMARY_URL,
+                                allow_redirects=True,
+                                timeout=30,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "curl_cffi proxy failed (attempt=%d, profile=%s): %s",
+                                attempt + 1,
+                                profile,
+                                exc,
+                            )
+                            continue
+                        finally:
+                            if proxy_session is not None:
+                                try:
+                                    proxy_session.close()
+                                except Exception:
+                                    pass
+
+                        status_code = cffi_resp.status_code
+                        if status_code >= 400:
+                            if status_code in cffi_retry_statuses:
+                                retryable_status_seen = True
+                            continue
+
+                        html = cffi_resp.text or ""
+                        final_url = str(cffi_resp.url) if hasattr(cffi_resp, "url") else ""
+                        if final_url:
+                            blocked_paths = (
+                                "/blocked", "/login", "/signin", "/captcha", "/challenge",
+                                "/access-denied", "/errors/", "/bot", "/security",
+                            )
+                            if any(bp in final_url.lower() for bp in blocked_paths):
+                                continue
+                        if _looks_blocked_html(html):
+                            continue
+                        if len(html) < 500:
+                            continue
+
+                        proxy_soup = BeautifulSoup(html, "lxml")
+                        proxy_title = (proxy_soup.title.get_text(strip=True) if proxy_soup.title else "") or "Unknown Product"
+                        if any(marker in proxy_title.lower() for marker in _BOT_TITLE_MARKERS):
+                            logger.warning("curl_cffi proxy bot challenge for %s (profile=%s)", product.url, profile)
+                            continue
+
+                        logger.info("curl_cffi proxy succeeded with profile %s on attempt %d", profile, attempt + 1)
+                        successful_html = html
+                        successful_soup = proxy_soup
+                        successful_title = proxy_title
+                        successful_site_name = _extract_site_name_from_soup(proxy_soup, product.url)
+                        successful_via_proxy = True
+                        successful_profile = profile
+                        break
 
                 if successful_html is not None and successful_soup is not None:
                     extracted_prices = _extract_prices_from_html(
@@ -6006,13 +6491,20 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                             user_id=caller_user_id,
                             site_name=successful_site_name,
                         )
-                        logger.info("scrape_success tier=curl_cffi domain=%s user=%s", scraped_hostname, caller_user_id)
+                        tier_name = "curl_cffi_proxy" if successful_via_proxy else "curl_cffi"
+                        logger.info(
+                            "scrape_success tier=%s profile=%s domain=%s user=%s",
+                            tier_name,
+                            successful_profile or "unknown",
+                            scraped_hostname,
+                            caller_user_id,
+                        )
                         return _build_scrape_response(
                             successful_title,
                             price,
                             currency_code,
                             effective_selector,
-                            "curl_cffi",
+                            tier_name,
                             original_price=original_price,
                             original_price_selector=effective_original_selector,
                             site_name=successful_site_name,
