@@ -14,9 +14,9 @@ RUN apt-get update && apt-get install -y \
     xvfb x11vnc novnc websockify \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install Camoufox + broker deps
+# Install Camoufox with GeoIP support + broker deps
 RUN pip3 install --break-system-packages --ignore-installed \
-    camoufox \
+    "camoufox[geoip]" \
     fastapi \
     "uvicorn[standard]"
 
