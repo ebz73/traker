@@ -7138,6 +7138,7 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
         else:
             logger.warning("ACI container failed to start for domain=%s user=%s", scraped_hostname, caller_user_id)
 
+    cdp_was_captcha_blocked = False
     cached_cdp_endpoint = _get_cached_cdp_endpoint() if cdp_healthy else None
     if cdp_healthy:
         _touch_aci_idle_timer()
@@ -7217,77 +7218,76 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                     cooldown_seconds = _COOLDOWN_DURATIONS[cooldown_reason]
                     _mark_domain_cooldown(scraped_hostname, cooldown_reason)
                     logger.info(
-                        "scrape_captcha_blocked tier=chrome_cdp domain=%s reason=%s cooldown=%.0fs",
+                        "scrape_captcha_blocked tier=chrome_cdp domain=%s reason=%s cooldown=%.0fs — will try Camoufox",
                         scraped_hostname,
                         cooldown_reason,
                         cooldown_seconds,
                     )
-                    return {
-                        "status": cdp_result["status"],
-                        "error": (
-                            f"{'CAPTCHA protection' if cooldown_reason == CooldownReason.CAPTCHA else 'Access blocking'} detected on {scraped_hostname}. "
-                            f"All proxy attempts exhausted. "
-                            f"Use the browser extension to check this price. "
-                            f"CDP will retry automatically in {int(cooldown_seconds // 60)} minutes."
-                        ),
-                        "domain": scraped_hostname,
-                        "cooldown_remaining": cooldown_seconds,
-                        "cooldown_reason": cooldown_reason,
-                        "source": "chrome_cdp",
-                    }
-                if not cdp_result.get("selector_worked") and effective_selector:
-                    logger.warning(
-                        "scrape_selector_drift tier=chrome_cdp domain=%s user=%s — selector failed, fallback found price",
-                        scraped_hostname, caller_user_id,
+                    _log_scrape_attempt(
+                        scraped_hostname,
+                        "chrome_cdp",
+                        False,
+                        fail_reason=cdp_result.get("status"),
+                        user_id=caller_user_id,
                     )
-                currency_code = normalize_currency_code(cdp_result.get("currency_code") or _guess_currency_code_from_url(product.url))
-                original_price = cdp_result.get("original_price")
-                _save_price_history(
-                    product_name=cdp_result["name"],
-                    url=product.url,
-                    price=cdp_result["price"],
-                    original_price=original_price,
-                    currency_code=currency_code,
-                    custom_selector=effective_selector,
-                    original_price_selector=effective_original_selector,
-                    ui_changed=False,
-                    user_id=caller_user_id,
-                )
-                _update_tracked_product_price(
-                    product.url,
-                    cdp_result["price"],
-                    original_price,
-                    cdp_result["name"],
-                    currency_code=currency_code,
-                    user_id=caller_user_id,
-                    site_name=cdp_result.get("site_name"),
-                )
-                _track_selector_drift(
-                    product.url,
-                    caller_user_id,
-                    selector_worked=cdp_result.get("selector_worked", False),
-                    has_selector=bool(effective_selector),
-                    tier="chrome_cdp",
-                )
-                logger.info(
-                    "scrape_success tier=chrome_cdp domain=%s user=%s price=%.2f original=%.2f elapsed=%.1fs",
-                    scraped_hostname,
-                    caller_user_id,
-                    float(cdp_result["price"]),
-                    float(original_price) if original_price is not None else 0,
-                    time.time() - scrape_start_time,
-                )
-                _log_scrape_attempt(scraped_hostname, "chrome_cdp", True, user_id=caller_user_id)
-                return _build_scrape_response(
-                    cdp_result["name"],
-                    cdp_result["price"],
-                    currency_code,
-                    effective_selector,
-                    "chrome_cdp",
-                    original_price=original_price,
-                    original_price_selector=effective_original_selector,
-                    site_name=cdp_result.get("site_name"),
-                )
+                    cdp_was_captcha_blocked = True
+                    # Don't return — fall through to Tier 4b Camoufox
+                elif cdp_result.get("price") is not None:
+                    if not cdp_result.get("selector_worked") and effective_selector:
+                        logger.warning(
+                            "scrape_selector_drift tier=chrome_cdp domain=%s user=%s — selector failed, fallback found price",
+                            scraped_hostname, caller_user_id,
+                        )
+                    currency_code = normalize_currency_code(
+                        cdp_result.get("currency_code") or _guess_currency_code_from_url(product.url)
+                    )
+                    original_price = cdp_result.get("original_price")
+                    _save_price_history(
+                        product_name=cdp_result["name"],
+                        url=product.url,
+                        price=cdp_result["price"],
+                        original_price=original_price,
+                        currency_code=currency_code,
+                        custom_selector=effective_selector,
+                        original_price_selector=effective_original_selector,
+                        ui_changed=False,
+                        user_id=caller_user_id,
+                    )
+                    _update_tracked_product_price(
+                        product.url,
+                        cdp_result["price"],
+                        original_price,
+                        cdp_result["name"],
+                        currency_code=currency_code,
+                        user_id=caller_user_id,
+                        site_name=cdp_result.get("site_name"),
+                    )
+                    _track_selector_drift(
+                        product.url,
+                        caller_user_id,
+                        selector_worked=cdp_result.get("selector_worked", False),
+                        has_selector=bool(effective_selector),
+                        tier="chrome_cdp",
+                    )
+                    logger.info(
+                        "scrape_success tier=chrome_cdp domain=%s user=%s price=%.2f original=%.2f elapsed=%.1fs",
+                        scraped_hostname,
+                        caller_user_id,
+                        float(cdp_result["price"]),
+                        float(original_price) if original_price is not None else 0,
+                        time.time() - scrape_start_time,
+                    )
+                    _log_scrape_attempt(scraped_hostname, "chrome_cdp", True, user_id=caller_user_id)
+                    return _build_scrape_response(
+                        cdp_result["name"],
+                        cdp_result["price"],
+                        currency_code,
+                        effective_selector,
+                        "chrome_cdp",
+                        original_price=original_price,
+                        original_price_selector=effective_original_selector,
+                        site_name=cdp_result.get("site_name"),
+                    )
         except Exception as exc:
             logger.warning("Chrome CDP scrape failed: %s", exc)
             _log_scrape_attempt(scraped_hostname, "chrome_cdp", False, fail_reason=str(exc)[:200], user_id=caller_user_id)
@@ -7372,6 +7372,22 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
             fail_reason="all_proxies_failed",
             user_id=caller_user_id,
         )
+
+    # If Chrome was captcha blocked and Camoufox also failed, return the captcha error
+    if cdp_was_captcha_blocked:
+        return {
+            "status": "captcha_blocked",
+            "error": (
+                f"CAPTCHA protection detected on {scraped_hostname}. "
+                f"All browser engines exhausted (Chrome + Firefox). "
+                f"Use the browser extension to check this price. "
+                f"CDP will retry automatically in {int(_COOLDOWN_DURATIONS.get(CooldownReason.CAPTCHA, 1800) // 60)} minutes."
+            ),
+            "domain": scraped_hostname,
+            "cooldown_remaining": _COOLDOWN_DURATIONS.get(CooldownReason.CAPTCHA, 1800),
+            "cooldown_reason": "captcha",
+            "source": "chrome_cdp",
+        }
 
     cdp_healthy_after_attempt = _cdp_endpoint_healthy(ttl_seconds=0.0)
     if effective_selector and not cdp_healthy_after_attempt:
