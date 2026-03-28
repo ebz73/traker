@@ -7304,7 +7304,7 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
     if CAMOUFOX_BROKER_URL and _camoufox_broker_healthy():
         _touch_camoufox_idle_timer()
         logger.info("tier_fallback tier=camoufox domain=%s user=%s", scraped_hostname, caller_user_id)
-        proxy_list = _get_cdp_proxy_list()
+        proxy_list = [p for p in _get_cdp_proxy_list() if p is not None]
         for proxy_url_str in proxy_list:
             fox_result = _scrape_with_camoufox(
                 product.url,
