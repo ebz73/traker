@@ -69,7 +69,7 @@ from patchright.sync_api import Locator
 from patchright.sync_api import TimeoutError as PlaywrightTimeoutError
 from patchright.sync_api import sync_playwright
 from pydantic import BaseModel
-from sqlalchemy import Boolean, Column, DateTime, Float, Index, Integer, String, create_engine, func, inspect, or_, text
+from sqlalchemy import Boolean, Column, DateTime, Float, Index, Integer, String, cast, create_engine, func, inspect, or_, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
@@ -207,6 +207,17 @@ ACI_IDLE_TIMEOUT_SECONDS = int(os.getenv("ACI_IDLE_TIMEOUT_SECONDS", "600"))  # 
 ACI_START_TIMEOUT_SECONDS = int(os.getenv("ACI_START_TIMEOUT_SECONDS", "120"))  # Max wait for container start
 ACI_HEALTH_POLL_INTERVAL = float(os.getenv("ACI_HEALTH_POLL_INTERVAL", "5"))  # Seconds between health checks during startup
 ENABLE_ACI_AUTO_START = os.getenv("ENABLE_ACI_AUTO_START", "true").lower() in ("true", "1", "yes")
+
+# --- Azure Container Instance (on-demand Camoufox / Firefox) ---
+CAMOUFOX_ACI_IMAGE = os.getenv("CAMOUFOX_ACI_IMAGE", "ghcr.io/ebz73/traker-camoufox:latest")
+CAMOUFOX_ACI_CONTAINER_NAME = os.getenv("CAMOUFOX_ACI_CONTAINER_NAME", "traker-camoufox")
+CAMOUFOX_ACI_CPU = float(os.getenv("CAMOUFOX_ACI_CPU", "1"))
+CAMOUFOX_ACI_MEMORY_GB = float(os.getenv("CAMOUFOX_ACI_MEMORY_GB", "2"))
+CAMOUFOX_BROKER_URL = os.getenv("CAMOUFOX_BROKER_URL", "")
+_CAMOUFOX_ACI_STARTING = False
+_CAMOUFOX_ACI_STARTING_LOCK = threading.Lock()
+_CAMOUFOX_ACI_IDLE_TIMER: Optional[threading.Timer] = None
+_CAMOUFOX_ACI_IDLE_TIMER_LOCK = threading.Lock()
 
 # --- Residential proxy for CDP scraping (dual-proxy with failover) ---
 # Primary proxy (DataImpulse — cheap at $1/GB, try first)
@@ -441,6 +452,175 @@ def _stop_aci_container():
             _CDP_HEALTH_CACHE["headers"] = {}
     except Exception as exc:
         logger.warning("Failed to stop ACI container: %s", exc)
+
+
+def _get_camoufox_aci_state() -> dict:
+    """Get state of the Camoufox ACI container group."""
+    client = _get_aci_client()
+    if not client:
+        return {"provisioning_state": "Unknown", "container_state": "Unknown", "ip": None}
+    try:
+        group = client.container_groups.get(ACI_RESOURCE_GROUP, CAMOUFOX_ACI_CONTAINER_NAME)
+        provisioning_state = group.provisioning_state or "Unknown"
+        container_state = "Unknown"
+        if group.containers:
+            instance_view = group.containers[0].instance_view
+            if instance_view and instance_view.current_state:
+                container_state = instance_view.current_state.state or "Unknown"
+        ip = group.ip_address.ip if group.ip_address else None
+        return {"provisioning_state": provisioning_state, "container_state": container_state, "ip": ip}
+    except Exception:
+        return {"provisioning_state": "NotFound", "container_state": "NotFound", "ip": None}
+
+
+def _ensure_camoufox_aci_running() -> bool:
+    """Start the Camoufox ACI container if not running. Returns True if healthy."""
+    global _CAMOUFOX_ACI_STARTING, CAMOUFOX_BROKER_URL
+
+    if not ENABLE_ACI_AUTO_START:
+        return False
+
+    with _CAMOUFOX_ACI_STARTING_LOCK:
+        if _CAMOUFOX_ACI_STARTING:
+            logger.info("Camoufox ACI start already in progress, waiting...")
+            for _ in range(int(ACI_START_TIMEOUT_SECONDS / ACI_HEALTH_POLL_INTERVAL)):
+                time.sleep(ACI_HEALTH_POLL_INTERVAL)
+                if not _CAMOUFOX_ACI_STARTING:
+                    return _camoufox_broker_healthy()
+            return False
+        _CAMOUFOX_ACI_STARTING = True
+
+    client = _get_aci_client()
+    if not client:
+        _CAMOUFOX_ACI_STARTING = False
+        return False
+
+    try:
+        state = _get_camoufox_aci_state()
+        logger.info("Camoufox ACI state: %s", state)
+
+        if state["container_state"] == "Running" and state["ip"]:
+            _update_camoufox_url(state["ip"])
+            if _camoufox_broker_healthy():
+                return True
+
+        if state["provisioning_state"] == "NotFound":
+            logger.info("Creating new Camoufox ACI container '%s'...", CAMOUFOX_ACI_CONTAINER_NAME)
+            _create_camoufox_aci_container(client)
+        else:
+            logger.info("Starting existing Camoufox ACI container '%s'...", CAMOUFOX_ACI_CONTAINER_NAME)
+            try:
+                client.container_groups.begin_start(ACI_RESOURCE_GROUP, CAMOUFOX_ACI_CONTAINER_NAME)
+            except Exception:
+                _create_camoufox_aci_container(client)
+
+        deadline = time.time() + ACI_START_TIMEOUT_SECONDS
+        while time.time() < deadline:
+            state = _get_camoufox_aci_state()
+            if state["container_state"] == "Running" and state["ip"]:
+                _update_camoufox_url(state["ip"])
+                if _camoufox_broker_healthy():
+                    logger.info("Camoufox ACI container started successfully")
+                    return True
+            if state["provisioning_state"] == "Failed":
+                logger.error("Camoufox ACI provisioning failed")
+                return False
+            time.sleep(ACI_HEALTH_POLL_INTERVAL)
+
+        logger.warning("Camoufox ACI did not become healthy within %ds", ACI_START_TIMEOUT_SECONDS)
+        return False
+    except Exception as exc:
+        logger.warning("Failed to start Camoufox ACI: %s", exc)
+        return False
+    finally:
+        _CAMOUFOX_ACI_STARTING = False
+
+
+def _create_camoufox_aci_container(client):
+    """Create the Camoufox ACI container group."""
+    from azure.mgmt.containerinstance.models import (
+        Container,
+        ContainerGroup,
+        ContainerGroupRestartPolicy,
+        ContainerPort,
+        IpAddress,
+        OperatingSystemTypes,
+        Port,
+        ResourceRequests,
+        ResourceRequirements,
+    )
+
+    container = Container(
+        name="camoufox",
+        image=CAMOUFOX_ACI_IMAGE,
+        resources=ResourceRequirements(
+            requests=ResourceRequests(cpu=CAMOUFOX_ACI_CPU, memory_in_gb=CAMOUFOX_ACI_MEMORY_GB)
+        ),
+        ports=[ContainerPort(port=3001)],
+    )
+
+    group = ContainerGroup(
+        location=ACI_LOCATION,
+        containers=[container],
+        os_type=OperatingSystemTypes.linux,
+        restart_policy=ContainerGroupRestartPolicy.NEVER,
+        ip_address=IpAddress(
+            ports=[Port(protocol="TCP", port=3001)],
+            type="Public",
+        ),
+    )
+
+    client.container_groups.begin_create_or_update(
+        ACI_RESOURCE_GROUP, CAMOUFOX_ACI_CONTAINER_NAME, group
+    )
+    logger.info("Camoufox ACI create/update initiated for '%s'", CAMOUFOX_ACI_CONTAINER_NAME)
+
+
+def _update_camoufox_url(ip: str):
+    """Update the Camoufox broker URL with the container's IP."""
+    global CAMOUFOX_BROKER_URL
+    new_url = f"http://{ip}:3001"
+    if CAMOUFOX_BROKER_URL != new_url:
+        logger.info("Updating CAMOUFOX_BROKER_URL: %s → %s", CAMOUFOX_BROKER_URL, new_url)
+        CAMOUFOX_BROKER_URL = new_url
+
+
+def _camoufox_broker_healthy(timeout: float = 10.0) -> bool:
+    """Check if the Camoufox broker is responding."""
+    if not CAMOUFOX_BROKER_URL:
+        return False
+    try:
+        import httpx as _httpx
+
+        resp = _httpx.get(f"{CAMOUFOX_BROKER_URL}/health", timeout=timeout)
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+
+def _stop_camoufox_aci_container():
+    """Stop the Camoufox ACI container group (does not delete — faster restart next time)."""
+    client = _get_aci_client()
+    if not client:
+        return
+    try:
+        logger.info("Stopping Camoufox ACI container '%s' (idle timeout)...", CAMOUFOX_ACI_CONTAINER_NAME)
+        client.container_groups.stop(ACI_RESOURCE_GROUP, CAMOUFOX_ACI_CONTAINER_NAME)
+        logger.info("Camoufox ACI container '%s' stopped successfully", CAMOUFOX_ACI_CONTAINER_NAME)
+    except Exception as exc:
+        logger.warning("Failed to stop Camoufox ACI container: %s", exc)
+
+
+def _touch_camoufox_idle_timer():
+    """Reset the Camoufox ACI idle timer. Call on every Camoufox scrape request."""
+    global _CAMOUFOX_ACI_IDLE_TIMER
+    with _CAMOUFOX_ACI_IDLE_TIMER_LOCK:
+        if _CAMOUFOX_ACI_IDLE_TIMER is not None:
+            _CAMOUFOX_ACI_IDLE_TIMER.cancel()
+        _CAMOUFOX_ACI_IDLE_TIMER = threading.Timer(ACI_IDLE_TIMEOUT_SECONDS, _stop_camoufox_aci_container)
+        _CAMOUFOX_ACI_IDLE_TIMER.daemon = True
+        _CAMOUFOX_ACI_IDLE_TIMER.start()
+        logger.debug("Camoufox ACI idle timer reset — will stop in %ds if no requests", ACI_IDLE_TIMEOUT_SECONDS)
 
 
 def _touch_aci_idle_timer():
@@ -1165,6 +1345,19 @@ class PriceAlert(Base):
     sent = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     sent_at = Column(DateTime, nullable=True)
+
+
+class ScrapeAttempt(Base):
+    __tablename__ = "scrape_attempts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    domain = Column(String, nullable=False, index=True)
+    tier = Column(String, nullable=False)
+    succeeded = Column(Boolean, nullable=False)
+    fail_reason = Column(String, nullable=True)
+    response_time_ms = Column(Integer, nullable=True)
+    user_id = Column(String, nullable=True)
+    timestamp = Column(DateTime, default=datetime.datetime.utcnow, index=True)
 
 
 def get_current_user(token: Optional[str] = Depends(oauth2_scheme)) -> User:
@@ -2377,6 +2570,14 @@ def try_http_first(
                             http2=use_http2,
                         )
                         response = proxy_client.get(url, headers=attempt_headers)
+                        logger.debug(
+                            "http_first attempt=%d status=%d size=%d url=%s proxy=%s",
+                            attempt + 1,
+                            response.status_code,
+                            len(response.text or ""),
+                            url[:80],
+                            bool(proxy_url),
+                        )
                     except httpx.HTTPError as exc:
                         last_reason = f"HTTP-first proxy error: {exc}"
                         if attempt < max_attempts - 1:
@@ -2392,6 +2593,14 @@ def try_http_first(
                 else:
                     client = HTTP_FIRST_CLIENT_HTTP2 if use_http2 else HTTP_FIRST_CLIENT_HTTP1
                     response = client.get(url, headers=attempt_headers)
+                    logger.debug(
+                        "http_first attempt=%d status=%d size=%d url=%s proxy=%s",
+                        attempt + 1,
+                        response.status_code,
+                        len(response.text or ""),
+                        url[:80],
+                        bool(proxy_url),
+                    )
             except httpx.HTTPError as exc:
                 last_reason = f"HTTP-first network error: {exc}"
                 if attempt < max_attempts - 1:
@@ -2407,6 +2616,7 @@ def try_http_first(
                     "/access-denied", "/errors/", "/bot", "/security",
                 )
                 if any(bp in final_url.lower() for bp in blocked_paths):
+                    logger.debug("http_first redirect_blocked url=%s final=%s", url[:80], final_url[:120])
                     return {"ok": False, "reason": f"Redirected to blocked page: {final_url[:120]}"}
 
             if len(html) < 500:
@@ -2432,12 +2642,14 @@ def try_http_first(
                 return {"ok": False, "reason": f"HTTP status {status_code}"}
 
             if _looks_blocked_html(html):
+                logger.debug("http_first blocked_html url=%s", url[:80])
                 return {"ok": False, "reason": "Blocked/challenge HTML detected"}
 
             quick_title_match = re.search(r"<title[^>]*>(.*?)</title>", html[:3000], re.IGNORECASE | re.DOTALL)
             if quick_title_match:
                 title_text = quick_title_match.group(1).strip().lower()
                 if any(marker in title_text for marker in _BOT_TITLE_MARKERS):
+                    logger.debug("http_first bot_title url=%s title=%s", url[:80], title_text[:60])
                     return {"ok": False, "reason": f"Bot challenge title detected: {title_text[:60]}"}
 
             soup = BeautifulSoup(html, "lxml")
@@ -2452,6 +2664,7 @@ def try_http_first(
             )
             price = extracted_prices.get("price")
             if price is None:
+                logger.debug("http_first price_not_found url=%s title=%s", url[:80], title[:60])
                 return {"ok": False, "reason": "Price not found in raw HTML"}
 
             currency_code = _extract_currency_code_from_soup(soup, url)
@@ -2648,6 +2861,15 @@ def _ensure_schema_columns():
                 conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_tracked_products_user_url ON tracked_products (user_id, url)"))
             if "extension_jobs" in table_names:
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_extension_jobs_status_created ON extension_jobs (status, created_at)"))
+            if "scrape_attempts" in table_names:
+                try:
+                    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=30)
+                    conn.execute(
+                        text("DELETE FROM scrape_attempts WHERE timestamp < :cutoff"),
+                        {"cutoff": cutoff},
+                    )
+                except Exception as exc:
+                    logger.warning("Failed to prune old scrape_attempts: %s", exc)
     except SQLAlchemyError as exc:
         logger.exception("Schema auto-migration failed: %s", exc)
 
@@ -2831,6 +3053,32 @@ def _track_selector_drift(
                 db.commit()
     except Exception as exc:
         logger.warning("Failed to track selector drift for %s: %s", url[:80], exc)
+
+
+def _log_scrape_attempt(
+    domain: Optional[str],
+    tier: str,
+    succeeded: bool,
+    fail_reason: Optional[str] = None,
+    response_time_ms: Optional[int] = None,
+    user_id: Optional[str] = None,
+) -> None:
+    """Log a scrape tier attempt for future routing optimization."""
+    try:
+        with SessionLocal() as db:
+            db.add(
+                ScrapeAttempt(
+                    domain=(domain or "unknown").lower(),
+                    tier=tier,
+                    succeeded=succeeded,
+                    fail_reason=(fail_reason or "")[:500] if fail_reason else None,
+                    response_time_ms=response_time_ms,
+                    user_id=user_id,
+                )
+            )
+            db.commit()
+    except Exception:
+        pass
 
 
 def _upsert_selector_for_url(
@@ -6009,6 +6257,84 @@ def _scrape_with_chrome_cdp(
                 logger.debug("Failed to stop Playwright in CDP cleanup: %s", exc)
 
 
+def _scrape_with_camoufox(
+    url: str,
+    proxy_url: Optional[str] = None,
+    custom_selector: Optional[str] = None,
+    original_price_selector: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Scrape via the Camoufox broker. Returns result dict or None."""
+    if not CAMOUFOX_BROKER_URL:
+        return None
+
+    try:
+        import httpx as _httpx
+
+        broker_payload = {
+            "url": url,
+            "proxy": proxy_url,
+            "timeout_ms": 90000,
+        }
+
+        logger.info("camoufox_scrape_start url=%s proxy=%s", url[:80], bool(proxy_url))
+        start_time = time.time()
+
+        resp = _httpx.post(
+            f"{CAMOUFOX_BROKER_URL}/scrape",
+            json=broker_payload,
+            timeout=120.0,
+        )
+
+        if resp.status_code != 200:
+            logger.warning("Camoufox broker returned %d for %s", resp.status_code, url[:80])
+            return None
+
+        result = resp.json()
+        html = result.get("html", "")
+        elapsed = time.time() - start_time
+
+        if not html or len(html) < 500:
+            logger.warning("Camoufox empty HTML (%d bytes) for %s", len(html), url[:80])
+            return None
+
+        if _looks_blocked_html(html):
+            logger.warning("Camoufox HTML blocked for %s", url[:80])
+            return None
+
+        soup = BeautifulSoup(html, "lxml")
+        page_title = (soup.title.get_text(strip=True) if soup.title else "") or ""
+        if any(marker in page_title.lower() for marker in _BOT_TITLE_MARKERS):
+            logger.warning("Camoufox bot challenge title for %s: %s", url[:80], page_title[:60])
+            return None
+
+        extracted = _extract_prices_from_html(
+            html,
+            url,
+            custom_selector=custom_selector,
+            original_price_selector=original_price_selector,
+            soup=soup,
+        )
+        price = extracted.get("price")
+        if price is None:
+            logger.warning("Camoufox no price found for %s", url[:80])
+            return None
+
+        logger.info("camoufox_scrape_success url=%s price=%.2f elapsed=%.1fs", url[:80], price, elapsed)
+
+        return {
+            "name": page_title or "Unknown Product",
+            "price": price,
+            "original_price": extracted.get("original_price"),
+            "currency_code": _extract_currency_code_from_soup(soup, url),
+            "site_name": _extract_site_name_from_soup(soup, url),
+            "selector_worked": extracted.get("selector_worked", False),
+        }
+
+    except Exception as exc:
+        logger.warning("Camoufox scrape exception for %s: %s", url[:80], exc)
+        return None
+
+
 def _update_tracked_product_price(
     url: str,
     price: float,
@@ -6218,6 +6544,7 @@ def _build_scrape_response(
 
 @app.post("/scrape")
 def scrape_price(product: ProductRequest, caller: User = Depends(get_current_user)):
+    scrape_start_time = time.time()
     caller_user_id = str(caller.id)
     latest_selectors = _get_latest_selectors_for_url(product.url, user_id=caller_user_id)
     effective_selector = _normalize_selector_value(product.custom_selector) or latest_selectors.get("custom_selector")
@@ -6226,14 +6553,18 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
     )
     scraped_hostname = urlparse(product.url).hostname
     logger.info(
-        "scrape_start user=%s domain=%s url=%s skip_ext=%s",
+        "scrape_start user=%s domain=%s url=%s skip_ext=%s has_selector=%s has_orig_selector=%s",
         caller_user_id,
         scraped_hostname,
         product.url[:120],
         product.skip_extension,
+        bool(effective_selector),
+        bool(effective_original_selector),
     )
 
     if ENABLE_TIER_1_HTTP:
+        proxy_enabled = bool(CDP_PROXY_PRIMARY_URL and CDP_PROXY_PRIMARY_URL.strip())
+        http_proxy_result: Optional[Dict[str, Any]] = None
         http_result = try_http_first(
             product.url,
             custom_selector=effective_selector,
@@ -6278,7 +6609,15 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                 has_selector=bool(effective_selector),
                 tier="http",
             )
-            logger.info("scrape_success tier=http domain=%s user=%s", scraped_hostname, caller_user_id)
+            logger.info(
+                "scrape_success tier=http domain=%s user=%s price=%.2f original=%.2f elapsed=%.1fs",
+                scraped_hostname,
+                caller_user_id,
+                final_price,
+                float(original_price) if original_price is not None else 0,
+                time.time() - scrape_start_time,
+            )
+            _log_scrape_attempt(scraped_hostname, "http", True, user_id=caller_user_id)
 
             return _build_scrape_response(
                 name,
@@ -6291,7 +6630,9 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                 site_name=site_name,
             )
 
-        if CDP_PROXY_PRIMARY_URL and CDP_PROXY_PRIMARY_URL.strip():
+        _log_scrape_attempt(scraped_hostname, "http", False, fail_reason=http_result.get("reason"), user_id=caller_user_id)
+
+        if proxy_enabled:
             logger.info("tier_retry tier=http_proxy reason=%s domain=%s", http_result.get("reason"), scraped_hostname)
             http_proxy_result = try_http_first(
                 product.url,
@@ -6339,7 +6680,15 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                     has_selector=bool(effective_selector),
                     tier="http_proxy",
                 )
-                logger.info("scrape_success tier=http_proxy domain=%s user=%s", scraped_hostname, caller_user_id)
+                logger.info(
+                    "scrape_success tier=http_proxy domain=%s user=%s price=%.2f original=%.2f elapsed=%.1fs",
+                    scraped_hostname,
+                    caller_user_id,
+                    final_price,
+                    float(original_price) if original_price is not None else 0,
+                    time.time() - scrape_start_time,
+                )
+                _log_scrape_attempt(scraped_hostname, "http_proxy", True, user_id=caller_user_id)
                 return _build_scrape_response(
                     name,
                     final_price,
@@ -6351,8 +6700,21 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                     site_name=site_name,
                 )
             logger.info("HTTP-first proxy also failed. Reason: %s", http_proxy_result.get("reason"))
+            _log_scrape_attempt(
+                scraped_hostname,
+                "http_proxy",
+                False,
+                fail_reason=http_proxy_result.get("reason"),
+                user_id=caller_user_id,
+            )
 
-        logger.info("HTTP-first failed; trying curl_cffi. Reason: %s", http_result.get("reason"))
+        logger.info(
+            "http_tiers_exhausted domain=%s user=%s http_reason=%s proxy_reason=%s",
+            scraped_hostname,
+            caller_user_id,
+            http_result.get("reason", "n/a"),
+            http_proxy_result.get("reason", "n/a") if proxy_enabled and http_proxy_result else "skipped",
+        )
     else:
         logger.info("tier_skip tier=http reason=disabled domain=%s user=%s", scraped_hostname, caller_user_id)
 
@@ -6384,6 +6746,7 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                 successful_site_name: Optional[str] = None
                 successful_via_proxy = False
                 successful_profile: Optional[str] = None
+                cffi_loop_start = time.time()
                 for profile in CFFI_IMPERSONATIONS:
                     # Small random delay between profile attempts to avoid burst detection.
                     if profile != CFFI_IMPERSONATIONS[0]:
@@ -6409,6 +6772,13 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                     if status_code >= 400:
                         if status_code in cffi_retry_statuses:
                             retryable_status_seen = True
+                        logger.debug(
+                            "curl_cffi profile=%s status=%d domain=%s attempt=%d",
+                            profile,
+                            status_code,
+                            scraped_hostname,
+                            attempt + 1,
+                        )
                         continue
 
                     html = cffi_resp.text or ""
@@ -6419,13 +6789,22 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                             "/access-denied", "/errors/", "/bot", "/security",
                         )
                         if any(bp in final_url.lower() for bp in blocked_paths):
+                            logger.debug("curl_cffi profile=%s redirect_blocked domain=%s", profile, scraped_hostname)
                             continue
                     if _looks_blocked_html(html):
+                        logger.debug("curl_cffi profile=%s blocked_html domain=%s", profile, scraped_hostname)
                         continue
                     if len(html) < 500:
+                        logger.debug("curl_cffi profile=%s too_small=%d domain=%s", profile, len(html), scraped_hostname)
                         continue
 
-                    logger.info("curl_cffi succeeded with profile %s on attempt %d", profile, attempt + 1)
+                    logger.info(
+                        "curl_cffi succeeded profile=%s attempt=%d elapsed=%.1fs domain=%s",
+                        profile,
+                        attempt + 1,
+                        time.time() - cffi_loop_start,
+                        scraped_hostname,
+                    )
                     successful_html = html
                     successful_soup = BeautifulSoup(html, "lxml")
                     successful_title = (successful_soup.title.get_text(strip=True) if successful_soup.title else "") or "Unknown Product"
@@ -6445,6 +6824,7 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
 
                 if successful_html is None and CDP_PROXY_PRIMARY_URL and CDP_PROXY_PRIMARY_URL.strip():
                     logger.info("curl_cffi datacenter failed; retrying with residential proxy (attempt %d)", attempt + 1)
+                    cffi_proxy_loop_start = time.time()
                     for profile in CFFI_IMPERSONATIONS:
                         if profile != CFFI_IMPERSONATIONS[0]:
                             time.sleep(random.uniform(0.5, 1.5))
@@ -6478,6 +6858,13 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                         if status_code >= 400:
                             if status_code in cffi_retry_statuses:
                                 retryable_status_seen = True
+                            logger.debug(
+                                "curl_cffi_proxy profile=%s status=%d domain=%s attempt=%d",
+                                profile,
+                                status_code,
+                                scraped_hostname,
+                                attempt + 1,
+                            )
                             continue
 
                         html = cffi_resp.text or ""
@@ -6488,10 +6875,18 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                                 "/access-denied", "/errors/", "/bot", "/security",
                             )
                             if any(bp in final_url.lower() for bp in blocked_paths):
+                                logger.debug("curl_cffi_proxy profile=%s redirect_blocked domain=%s", profile, scraped_hostname)
                                 continue
                         if _looks_blocked_html(html):
+                            logger.debug("curl_cffi_proxy profile=%s blocked_html domain=%s", profile, scraped_hostname)
                             continue
                         if len(html) < 500:
+                            logger.debug(
+                                "curl_cffi_proxy profile=%s too_small=%d domain=%s",
+                                profile,
+                                len(html),
+                                scraped_hostname,
+                            )
                             continue
 
                         proxy_soup = BeautifulSoup(html, "lxml")
@@ -6500,7 +6895,13 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                             logger.warning("curl_cffi proxy bot challenge for %s (profile=%s)", product.url, profile)
                             continue
 
-                        logger.info("curl_cffi proxy succeeded with profile %s on attempt %d", profile, attempt + 1)
+                        logger.info(
+                            "curl_cffi_proxy succeeded profile=%s attempt=%d elapsed=%.1fs domain=%s",
+                            profile,
+                            attempt + 1,
+                            time.time() - cffi_proxy_loop_start,
+                            scraped_hostname,
+                        )
                         successful_html = html
                         successful_soup = proxy_soup
                         successful_title = proxy_title
@@ -6555,12 +6956,16 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                             tier=tier_name,
                         )
                         logger.info(
-                            "scrape_success tier=%s profile=%s domain=%s user=%s",
+                            "scrape_success tier=%s profile=%s domain=%s user=%s price=%.2f original=%.2f elapsed=%.1fs",
                             tier_name,
                             successful_profile or "unknown",
                             scraped_hostname,
                             caller_user_id,
+                            float(price),
+                            float(original_price) if original_price is not None else 0,
+                            time.time() - scrape_start_time,
                         )
+                        _log_scrape_attempt(scraped_hostname, tier_name, True, user_id=caller_user_id)
                         return _build_scrape_response(
                             successful_title,
                             price,
@@ -6574,6 +6979,13 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                     logger.info(
                         "curl_cffi fetched HTML successfully but failed to extract a price for %s",
                         product.url,
+                    )
+                    _log_scrape_attempt(
+                        scraped_hostname,
+                        "curl_cffi_proxy" if successful_via_proxy else "curl_cffi",
+                        False,
+                        fail_reason="price_not_found",
+                        user_id=caller_user_id,
                     )
                     break
 
@@ -6857,7 +7269,15 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                     has_selector=bool(effective_selector),
                     tier="chrome_cdp",
                 )
-                logger.info("scrape_success tier=chrome_cdp domain=%s user=%s", scraped_hostname, caller_user_id)
+                logger.info(
+                    "scrape_success tier=chrome_cdp domain=%s user=%s price=%.2f original=%.2f elapsed=%.1fs",
+                    scraped_hostname,
+                    caller_user_id,
+                    float(cdp_result["price"]),
+                    float(original_price) if original_price is not None else 0,
+                    time.time() - scrape_start_time,
+                )
+                _log_scrape_attempt(scraped_hostname, "chrome_cdp", True, user_id=caller_user_id)
                 return _build_scrape_response(
                     cdp_result["name"],
                     cdp_result["price"],
@@ -6870,8 +7290,88 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                 )
         except Exception as exc:
             logger.warning("Chrome CDP scrape failed: %s", exc)
+            _log_scrape_attempt(scraped_hostname, "chrome_cdp", False, fail_reason=str(exc)[:200], user_id=caller_user_id)
     else:
         logger.warning("tier_skip tier=chrome_cdp reason=unhealthy domain=%s user=%s", scraped_hostname, caller_user_id)
+        _log_scrape_attempt(scraped_hostname, "chrome_cdp", False, fail_reason="unhealthy", user_id=caller_user_id)
+
+    # Tier 4b: Camoufox (Firefox) — separate container, different browser engine
+    if not CAMOUFOX_BROKER_URL or not _camoufox_broker_healthy():
+        if CAMOUFOX_ACI_IMAGE and ENABLE_ACI_AUTO_START:
+            logger.info("Starting Camoufox ACI container for domain=%s", scraped_hostname)
+            _ensure_camoufox_aci_running()
+
+    if CAMOUFOX_BROKER_URL and _camoufox_broker_healthy():
+        _touch_camoufox_idle_timer()
+        logger.info("tier_fallback tier=camoufox domain=%s user=%s", scraped_hostname, caller_user_id)
+        proxy_list = _get_cdp_proxy_list()
+        for proxy_url_str in proxy_list:
+            fox_result = _scrape_with_camoufox(
+                product.url,
+                proxy_url=proxy_url_str,
+                custom_selector=effective_selector,
+                original_price_selector=effective_original_selector,
+            )
+            if fox_result and fox_result.get("price") is not None:
+                fox_price = fox_result["price"]
+                fox_original = fox_result.get("original_price")
+                fox_name = fox_result.get("name", "Unknown Product")
+                fox_currency = normalize_currency_code(
+                    fox_result.get("currency_code") or _guess_currency_code_from_url(product.url)
+                )
+                fox_site_name = fox_result.get("site_name")
+                _save_price_history(
+                    product_name=fox_name,
+                    url=product.url,
+                    price=fox_price,
+                    original_price=fox_original,
+                    currency_code=fox_currency,
+                    custom_selector=effective_selector,
+                    original_price_selector=effective_original_selector,
+                    ui_changed=False,
+                    user_id=caller_user_id,
+                )
+                _update_tracked_product_price(
+                    product.url,
+                    fox_price,
+                    fox_original,
+                    fox_name,
+                    currency_code=fox_currency,
+                    user_id=caller_user_id,
+                    site_name=fox_site_name,
+                )
+                _track_selector_drift(
+                    product.url,
+                    caller_user_id,
+                    selector_worked=fox_result.get("selector_worked", False),
+                    has_selector=bool(effective_selector),
+                    tier="camoufox",
+                )
+                logger.info(
+                    "scrape_success tier=camoufox domain=%s user=%s price=%.2f elapsed=%.1fs",
+                    scraped_hostname,
+                    caller_user_id,
+                    fox_price,
+                    time.time() - scrape_start_time,
+                )
+                _log_scrape_attempt(scraped_hostname, "camoufox", True, user_id=caller_user_id)
+                return _build_scrape_response(
+                    fox_name,
+                    fox_price,
+                    fox_currency,
+                    effective_selector,
+                    "camoufox",
+                    original_price=fox_original,
+                    original_price_selector=effective_original_selector,
+                    site_name=fox_site_name,
+                )
+        _log_scrape_attempt(
+            scraped_hostname,
+            "camoufox",
+            False,
+            fail_reason="all_proxies_failed",
+            user_id=caller_user_id,
+        )
 
     cdp_healthy_after_attempt = _cdp_endpoint_healthy(ttl_seconds=0.0)
     if effective_selector and not cdp_healthy_after_attempt:
@@ -6923,7 +7423,13 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
             logger.warning("Failed to update selector fail count: %s", exc)
             # Fall through to generic error if counter update fails
 
-    logger.warning("scrape_failed domain=%s user=%s url=%s", scraped_hostname, caller_user_id, product.url[:120])
+    logger.warning(
+        "scrape_failed domain=%s user=%s url=%s elapsed=%.1fs",
+        scraped_hostname,
+        caller_user_id,
+        product.url[:120],
+        time.time() - scrape_start_time,
+    )
     return {"error": "Price not found on page. The page structure may have changed."}
 
 
@@ -7222,6 +7728,7 @@ def extension_job_complete(
             has_selector=bool(job_selector),
             tier="extension_job",
         )
+        _log_scrape_attempt(_get_domain(job_url), "extension", True, user_id=job_user_id)
         return {"ok": True, "status": "done"}
     except HTTPException:
         raise
@@ -7268,12 +7775,59 @@ def extension_price_report(report: ExtensionPriceReport, user: User = Depends(ge
         has_selector=bool(report.selector),
         tier="extension_report",
     )
+    _log_scrape_attempt(_get_domain(report.url), "extension", True, user_id=str(user.id))
     logger.info(
         "extension_report_success domain=%s user=%s",
         _get_domain(report.url),
         str(user.id),
     )
     return {"ok": True}
+
+
+@app.get("/admin/scrape-stats")
+def get_scrape_stats(days: int = 7, caller: User = Depends(get_current_user)):
+    """Return per-domain, per-tier success rates from recent scrape attempts."""
+    try:
+        cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=days)
+        with SessionLocal() as db:
+            rows = (
+                db.query(
+                    ScrapeAttempt.domain,
+                    ScrapeAttempt.tier,
+                    func.count(ScrapeAttempt.id).label("total"),
+                    func.sum(cast(ScrapeAttempt.succeeded, Integer)).label("successes"),
+                )
+                .filter(
+                    ScrapeAttempt.timestamp >= cutoff,
+                )
+                .group_by(
+                    ScrapeAttempt.domain,
+                    ScrapeAttempt.tier,
+                )
+                .order_by(
+                    ScrapeAttempt.domain,
+                    ScrapeAttempt.tier,
+                )
+                .all()
+            )
+
+            stats = []
+            for row in rows:
+                total = row.total or 0
+                successes = row.successes or 0
+                stats.append(
+                    {
+                        "domain": row.domain,
+                        "tier": row.tier,
+                        "total": total,
+                        "successes": successes,
+                        "success_rate": round(successes / total, 3) if total > 0 else 0,
+                    }
+                )
+            return {"days": days, "stats": stats}
+    except Exception as exc:
+        logger.warning("Failed to query scrape stats: %s", exc)
+        return {"days": days, "stats": [], "error": str(exc)}
 
 
 @app.get("/extension/products")
