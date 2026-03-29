@@ -36,7 +36,7 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlsplit, urlunparse, urlunsplit
 
 import httpx
 try:
@@ -240,6 +240,8 @@ CDP_PROXY_ENABLED = (
     or bool(CDP_PROXY_ISP_URL_2.strip())
     or bool(CDP_PROXY_ISP_URL_3.strip())
 )
+# Optional: override Playwright user agent for CDP (must match remote Chrome major version or omit).
+CDP_USER_AGENT = os.getenv("CDP_USER_AGENT", "").strip()
 
 # --- ACI Container Management ---
 _ACI_CLIENT: Optional[Any] = None
@@ -3995,6 +3997,38 @@ def _make_sticky_proxy_config(proxy_url: str) -> Optional[dict]:
     return _parse_proxy_url(proxy_url)
 
 
+def _proxy_playwright_config_to_url(cfg: dict) -> str:
+    """Serialize a Playwright proxy dict back to a URL string (for Camoufox HTTP broker)."""
+    parsed = urlparse(cfg["server"])
+    if not parsed.hostname or not parsed.port:
+        return cfg["server"]
+    user = cfg.get("username")
+    pwd = cfg.get("password")
+    if user is not None:
+        u = quote(user, safe="")
+        if pwd is not None:
+            p = quote(pwd, safe="")
+            netloc = f"{u}:{p}@{parsed.hostname}:{parsed.port}"
+        else:
+            netloc = f"{u}@{parsed.hostname}:{parsed.port}"
+    else:
+        netloc = f"{parsed.hostname}:{parsed.port}"
+    return urlunparse((parsed.scheme, netloc, "", "", "", ""))
+
+
+def _make_sticky_proxy_url_for_broker(proxy_url: Optional[str]) -> Optional[str]:
+    """
+    Same sticky-session rules as _make_sticky_proxy_config, but as a URL for Tier 4b broker.
+    """
+    raw = (proxy_url or "").strip()
+    if not raw:
+        return None
+    cfg = _make_sticky_proxy_config(raw)
+    if not cfg:
+        return raw
+    return _proxy_playwright_config_to_url(cfg)
+
+
 def _get_cdp_proxy_list() -> List[Optional[str]]:
     """
     Proxy list for Chrome CDP (Tier 4a).
@@ -4081,6 +4115,67 @@ def _timezone_for_proxy(proxy_config: Optional[dict]) -> str:
     # Residential/ISP proxy — use a safe central US default.
     # Use America/Chicago as a safe central US default.
     return "America/Chicago"
+
+
+# Tier 4a: vary desktop geometry — default 1280×720-only traffic is a common bot cluster signal.
+_CDP_VIEWPORT_PRESETS: Tuple[Tuple[int, int], ...] = (
+    (1920, 1080),
+    (1536, 864),
+    (1440, 900),
+    (1366, 768),
+    (1280, 720),
+)
+
+# Run before page scripts (Tier 4a CDP). Keep small — real Chrome already looks legitimate over CDP.
+_CDP_STEALTH_INIT_JS = """
+(() => {
+  try {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined, configurable: true });
+  } catch (e) {}
+  try {
+    for (const k of Object.keys(window)) {
+      if (k.startsWith('cdc_')) {
+        try { delete window[k]; } catch (e) {}
+      }
+    }
+  } catch (e) {}
+})();
+"""
+
+
+def _build_cdp_playwright_context_kwargs(proxy_config: Optional[dict]) -> dict:
+    """Playwright context options aligned with timezone/proxy (Tier 4a)."""
+    w, h = random.choice(_CDP_VIEWPORT_PRESETS)
+    chrome_ui = random.randint(72, 140)
+    kwargs: Dict[str, Any] = dict(
+        locale="en-US",
+        timezone_id=_timezone_for_proxy(proxy_config),
+        java_script_enabled=True,
+        viewport={"width": w, "height": h},
+        screen={"width": w, "height": min(h + chrome_ui, h + 200)},
+        color_scheme="light",
+        reduced_motion="no-preference",
+        forced_colors="none",
+        device_scale_factor=1,
+        has_touch=False,
+        is_mobile=False,
+        extra_http_headers={
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+    )
+    if CDP_USER_AGENT:
+        kwargs["user_agent"] = CDP_USER_AGENT
+    if proxy_config:
+        kwargs["proxy"] = proxy_config
+    return kwargs
+
+
+def _cdp_attach_stealth_init(context) -> None:
+    """Attach minimal stealth init script to a Playwright browser context."""
+    try:
+        context.add_init_script(_CDP_STEALTH_INIT_JS)
+    except Exception as exc:
+        logger.debug("CDP stealth init script attach failed: %s", exc)
 
 
 def _get_cdp_browser():
@@ -4378,7 +4473,7 @@ def inject_popup_prevention(page) -> None:
     """Call BEFORE page.goto(). Blocks popups proactively via init script."""
     try:
         page.add_init_script(_POPUP_PREVENTION_JS)
-        logger.info("Popup prevention JS injected")
+        logger.debug("Popup prevention JS injected")
     except Exception as exc:
         logger.warning("Failed to inject popup prevention script: %s", exc)
 
@@ -6070,14 +6165,9 @@ def _scrape_with_chrome_cdp(
 
         try:
             if not per_attempt_context:
-                _context_kwargs = dict(
-                    locale="en-US",
-                    timezone_id=_timezone_for_proxy(proxy_config),
-                    java_script_enabled=True,
-                )
-                if proxy_config:
-                    _context_kwargs["proxy"] = proxy_config
+                _context_kwargs = _build_cdp_playwright_context_kwargs(proxy_config)
                 shared_context = browser.new_context(**_context_kwargs)
+                _cdp_attach_stealth_init(shared_context)
 
             for attempt in range(max_attempts):
                 if time.time() > wall_deadline:
@@ -6091,14 +6181,9 @@ def _scrape_with_chrome_cdp(
                     try:
                         # For per-attempt contexts, generate a fresh sticky session per attempt.
                         attempt_proxy = _make_sticky_proxy_config(proxy_url) if proxy_url else proxy_config
-                        _context_kwargs = dict(
-                            locale="en-US",
-                            timezone_id=_timezone_for_proxy(attempt_proxy),
-                            java_script_enabled=True,
-                        )
-                        if attempt_proxy:
-                            _context_kwargs["proxy"] = attempt_proxy
+                        _context_kwargs = _build_cdp_playwright_context_kwargs(attempt_proxy)
                         context = browser.new_context(**_context_kwargs)
+                        _cdp_attach_stealth_init(context)
                     except Exception as exc:
                         logger.debug("CDP context creation failed on attempt %d: %s", attempt + 1, exc)
                         _retry_sleep(attempt)
@@ -6109,9 +6194,35 @@ def _scrape_with_chrome_cdp(
                     page = context.new_page()
                     page.on("dialog", lambda dialog: dialog.dismiss())
                     inject_popup_prevention(page)
+                    _anti_bot_sleep(0.08, 0.35)
                     try:
-                        wait_strategy = "networkidle" if proxy_config else "domcontentloaded"
-                        response = page.goto(url, wait_until=wait_strategy, timeout=90000)
+                        parsed_target = urlparse(url)
+                        homepage = f"{parsed_target.scheme}://{parsed_target.netloc}/"
+                        path_only = parsed_target.path or "/"
+                        is_site_root_only = path_only.rstrip("/") in ("", "/") and not parsed_target.query
+                        referer: Optional[str] = None
+                        if not is_site_root_only:
+                            try:
+                                page.goto(homepage, wait_until="domcontentloaded", timeout=25000)
+                                _anti_bot_sleep(0.45, 1.35)
+                                _handle_cookie_banner(page, url=homepage)
+                                _anti_bot_sleep(0.15, 0.55)
+                                referer = homepage
+                            except Exception as wexc:
+                                logger.debug("CDP homepage warmup failed: %s", wexc)
+                                referer = random.choice(
+                                    (
+                                        "https://www.google.com/",
+                                        "https://www.bing.com/",
+                                        "https://duckduckgo.com/",
+                                    )
+                                )
+                        # Prefer "load" over "networkidle" — the latter is a frequent automation fingerprint.
+                        wait_strategy = "load"
+                        goto_kw: Dict[str, Any] = {"wait_until": wait_strategy, "timeout": 90000}
+                        if referer:
+                            goto_kw["referer"] = referer
+                        response = page.goto(url, **goto_kw)
                         if response and response.status in PERMANENT_ERROR_CODES:
                             logger.warning(
                                 "CDP page returned HTTP %d for %s on attempt %d — skipping",
@@ -6186,8 +6297,8 @@ def _scrape_with_chrome_cdp(
 
                     had_real_content = True
                     if time.time() <= wall_deadline:
-                        if per_attempt_context:
-                            _simulate_human_behavior(page, duration_seconds=2.0)
+                        sim_sec = 2.2 if per_attempt_context else 1.2
+                        _simulate_human_behavior(page, duration_seconds=sim_sec)
                         handle_all_popups(page, url, is_recheck=True)
                     else:
                         logger.info("CDP wall-clock timeout reached for %s — skipping simulation/recheck, proceeding to extraction", url)
@@ -6331,13 +6442,14 @@ def _scrape_with_camoufox(
     try:
         import httpx as _httpx
 
+        sticky_proxy = _make_sticky_proxy_url_for_broker(proxy_url)
         broker_payload = {
             "url": url,
-            "proxy": proxy_url,
+            "proxy": sticky_proxy,
             "timeout_ms": 90000,
         }
 
-        logger.info("camoufox_scrape_start url=%s proxy=%s", url[:80], bool(proxy_url))
+        logger.info("camoufox_scrape_start url=%s proxy=%s", url[:80], bool(sticky_proxy))
         start_time = time.time()
 
         resp = _httpx.post(

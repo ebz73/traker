@@ -14,7 +14,8 @@ Built-in stealth (C++ level, handled by Camoufox — DON'T override):
 Broker-level stealth (we handle):
 - Virtual display mode (headless="virtual") — defeats headless detection
 - Homepage warmup (establish session cookies before product page)
-- Google referrer (look like organic search traffic)
+- Product navigation uses same-origin referer after warmup (search referer if warmup skipped)
+- Weighted Windows/macOS fingerprint mix
 - Cookie banner dismissal
 - Price element wait + scroll for lazy-load
 - enable_cache for realistic browser caching behavior
@@ -95,6 +96,8 @@ def _sync_scrape(url: str, proxy: Optional[str], timeout_ms: int) -> dict:
         url[:80], HEADLESS_MODE, bool(proxy),
     )
     start = time.time()
+    # Traffic mix: mostly Windows desktop, some macOS (BrowserForge aligns fingerprints per OS).
+    _os = random.choices(["windows", "macos"], weights=[4, 1], k=1)[0]
 
     with Camoufox(
         # --- Headless mode ---
@@ -105,7 +108,7 @@ def _sync_scrape(url: str, proxy: Optional[str], timeout_ms: int) -> dict:
         proxy=proxy_config,
         # --- Built-in C++ stealth ---
         humanize=True,              # C++ Bezier mouse curves, distance-aware
-        os="windows",               # ~75% of real traffic is Windows
+        os=_os,
         geoip=True if proxy_config else False,  # Auto timezone/locale from proxy IP
         block_webrtc=True,          # Prevent real IP leak
         # --- Browser behavior ---
@@ -119,39 +122,57 @@ def _sync_scrape(url: str, proxy: Optional[str], timeout_ms: int) -> dict:
         try:
             # Dismiss any JS dialogs
             page.on("dialog", lambda dialog: dialog.dismiss())
+            time.sleep(random.uniform(0.12, 0.42))
 
             # --- STEP 1: Homepage warmup ---
             # Real users arrive with session cookies from browsing the site.
             # Direct product URL with zero cookies = suspicious to anti-bots.
             parsed_url = urlparse(url)
             homepage = f"{parsed_url.scheme}://{parsed_url.netloc}/"
-            try:
-                logger.info("Camoufox warmup: %s", parsed_url.netloc)
-                page.goto(homepage, wait_until="domcontentloaded", timeout=20000)
-                time.sleep(random.uniform(1.5, 3.0))
-                _dismiss_cookie_banner(page)
-                time.sleep(random.uniform(0.5, 1.0))
-            except Exception as exc:
-                logger.debug("Homepage warmup failed (continuing): %s", exc)
+            path_only = parsed_url.path or "/"
+            is_site_root_only = path_only.rstrip("/") in ("", "/") and not parsed_url.query
+
+            warmup_ok = False
+            if not is_site_root_only:
+                try:
+                    logger.info("Camoufox warmup: %s", parsed_url.netloc)
+                    page.goto(homepage, wait_until="domcontentloaded", timeout=20000)
+                    time.sleep(random.uniform(1.5, 3.0))
+                    _dismiss_cookie_banner(page)
+                    time.sleep(random.uniform(0.5, 1.0))
+                    warmup_ok = True
+                except Exception as exc:
+                    logger.debug("Homepage warmup failed (continuing): %s", exc)
+
+            # Same-origin referer after warmup matches in-site navigation; otherwise search referer.
+            if warmup_ok:
+                product_referer = homepage
+            else:
+                product_referer = random.choice(
+                    (
+                        "https://www.google.com/",
+                        "https://www.bing.com/",
+                        "https://duckduckgo.com/",
+                    )
+                )
 
             # --- STEP 2: Navigate to product page ---
-            # Google referrer makes it look like organic search traffic.
             # enable_cache=True means homepage assets are cached (realistic).
             try:
                 page.goto(
                     url,
-                    wait_until="networkidle",
+                    wait_until="load",
                     timeout=timeout_ms,
-                    referer="https://www.google.com/",
+                    referer=product_referer,
                 )
             except Exception:
-                # Some sites never reach networkidle — fall back
-                logger.debug("networkidle timeout, falling back to domcontentloaded")
+                # Some SPAs never fire full load reliably — fall back
+                logger.debug("load wait timeout, falling back to domcontentloaded")
                 page.goto(
                     url,
                     wait_until="domcontentloaded",
                     timeout=timeout_ms,
-                    referer="https://www.google.com/",
+                    referer=product_referer,
                 )
 
             # --- STEP 3: Wait for price elements ---
