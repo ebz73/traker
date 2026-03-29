@@ -219,14 +219,27 @@ _CAMOUFOX_ACI_STARTING_LOCK = threading.Lock()
 _CAMOUFOX_ACI_IDLE_TIMER: Optional[threading.Timer] = None
 _CAMOUFOX_ACI_IDLE_TIMER_LOCK = threading.Lock()
 
-# --- Residential proxy for CDP scraping (dual-proxy with failover) ---
+# --- Proxy configuration for CDP/Camoufox scraping (direct-first, multi-proxy failover) ---
 # Primary proxy (DataImpulse — cheap at $1/GB, try first)
 # Fallback proxy (IPRoyal — more reliable at $7/GB, try if primary fails)
 # Format: http://username:password@proxy-host:port
-# Leave both empty to disable (Chrome will use the container's Azure datacenter IP directly).
+# Leave all empty to disable (the browsers will use the container's Azure datacenter IP directly).
 CDP_PROXY_PRIMARY_URL = os.getenv("CDP_PROXY_PRIMARY_URL", "")  # DataImpulse
 CDP_PROXY_FALLBACK_URL = os.getenv("CDP_PROXY_FALLBACK_URL", "")  # IPRoyal
-CDP_PROXY_ENABLED = bool(CDP_PROXY_PRIMARY_URL.strip()) or bool(CDP_PROXY_FALLBACK_URL.strip())
+# ISP proxies (Decodo — static residential IPs from real ISPs, highest trust)
+# These bypass CDN-level blocking on hard sites like Walmart, H&M
+# Split across browser engines: #1 for Chrome, #2 for Camoufox, #3 shared fallback
+# Format: http://user-country-us:password@isp.decodo.com:port
+CDP_PROXY_ISP_URL = os.getenv("CDP_PROXY_ISP_URL", "")  # Decodo ISP #1 — Chrome CDP
+CDP_PROXY_ISP_URL_2 = os.getenv("CDP_PROXY_ISP_URL_2", "")  # Decodo ISP #2 — Camoufox
+CDP_PROXY_ISP_URL_3 = os.getenv("CDP_PROXY_ISP_URL_3", "")  # Decodo ISP #3 — shared fallback
+CDP_PROXY_ENABLED = (
+    bool(CDP_PROXY_PRIMARY_URL.strip())
+    or bool(CDP_PROXY_FALLBACK_URL.strip())
+    or bool(CDP_PROXY_ISP_URL.strip())
+    or bool(CDP_PROXY_ISP_URL_2.strip())
+    or bool(CDP_PROXY_ISP_URL_3.strip())
+)
 
 # --- ACI Container Management ---
 _ACI_CLIENT: Optional[Any] = None
@@ -3984,23 +3997,71 @@ def _make_sticky_proxy_config(proxy_url: str) -> Optional[dict]:
 
 def _get_cdp_proxy_list() -> List[Optional[str]]:
     """
-    Return ordered list of proxy URL strings to try.
-    Returns raw URLs (not parsed configs) so that each attempt
-    can generate a fresh sticky session from the URL.
+    Proxy list for Chrome CDP (Tier 4a).
+    Order: direct -> residential cheap -> residential fallback -> ISP #1 -> ISP #3 (shared).
+    Direct goes first so we discover which domains work without proxy.
     """
     proxies: List[Optional[str]] = []
+    proxies.append(None)
     if CDP_PROXY_PRIMARY_URL and CDP_PROXY_PRIMARY_URL.strip():
         proxies.append(CDP_PROXY_PRIMARY_URL.strip())
     if CDP_PROXY_FALLBACK_URL and CDP_PROXY_FALLBACK_URL.strip():
         proxies.append(CDP_PROXY_FALLBACK_URL.strip())
-    proxies.append(None)
+    if CDP_PROXY_ISP_URL and CDP_PROXY_ISP_URL.strip():
+        proxies.append(CDP_PROXY_ISP_URL.strip())
+    if CDP_PROXY_ISP_URL_3 and CDP_PROXY_ISP_URL_3.strip():
+        proxies.append(CDP_PROXY_ISP_URL_3.strip())
     return proxies
+
+
+def _get_camoufox_proxy_list() -> List[Optional[str]]:
+    """
+    Proxy list for Camoufox (Tier 4b).
+    Order: direct -> residential cheap -> residential fallback -> ISP #2 -> ISP #3 (shared).
+    Direct goes first so we discover which domains work without proxy on Camoufox.
+    ISP #2 is dedicated to Camoufox (different IP than Chrome's ISP #1).
+    """
+    proxies: List[Optional[str]] = []
+    proxies.append(None)
+    if CDP_PROXY_PRIMARY_URL and CDP_PROXY_PRIMARY_URL.strip():
+        proxies.append(CDP_PROXY_PRIMARY_URL.strip())
+    if CDP_PROXY_FALLBACK_URL and CDP_PROXY_FALLBACK_URL.strip():
+        proxies.append(CDP_PROXY_FALLBACK_URL.strip())
+    if CDP_PROXY_ISP_URL_2 and CDP_PROXY_ISP_URL_2.strip():
+        proxies.append(CDP_PROXY_ISP_URL_2.strip())
+    if CDP_PROXY_ISP_URL_3 and CDP_PROXY_ISP_URL_3.strip():
+        proxies.append(CDP_PROXY_ISP_URL_3.strip())
+    return proxies
+
+
+def _get_proxy_label(proxy_url: Optional[str]) -> str:
+    """Return a stable log label for a configured proxy URL."""
+    if proxy_url is None:
+        return "direct"
+
+    primary_proxy = CDP_PROXY_PRIMARY_URL.strip() if CDP_PROXY_PRIMARY_URL else ""
+    fallback_proxy = CDP_PROXY_FALLBACK_URL.strip() if CDP_PROXY_FALLBACK_URL else ""
+    isp_proxy_1 = CDP_PROXY_ISP_URL.strip() if CDP_PROXY_ISP_URL else ""
+    isp_proxy_2 = CDP_PROXY_ISP_URL_2.strip() if CDP_PROXY_ISP_URL_2 else ""
+    isp_proxy_3 = CDP_PROXY_ISP_URL_3.strip() if CDP_PROXY_ISP_URL_3 else ""
+
+    if proxy_url == primary_proxy:
+        return "primary_proxy"
+    if proxy_url == fallback_proxy:
+        return "fallback_proxy"
+    if proxy_url == isp_proxy_1:
+        return "isp_proxy_1"
+    if proxy_url == isp_proxy_2:
+        return "isp_proxy_2"
+    if proxy_url == isp_proxy_3:
+        return "isp_proxy_3"
+    return "unknown_proxy"
 
 
 def _timezone_for_proxy(proxy_config: Optional[dict]) -> str:
     """
     Return a timezone consistent with the proxy's likely geography.
-    DataImpulse residential proxies rotate US IPs, so we use a broad US timezone.
+    Residential and ISP proxies here use US IPs, so we use a broad US timezone.
     When no proxy is used (Azure datacenter), use the ACI region's timezone.
     """
     if proxy_config is None:
@@ -4017,7 +4078,7 @@ def _timezone_for_proxy(proxy_config: Optional[dict]) -> str:
             "northcentralus": "America/Chicago",
         }
         return location_tz.get(aci_location, "America/New_York")
-    # Residential proxy — DataImpulse/IPRoyal rotate US IPs.
+    # Residential/ISP proxy — use a safe central US default.
     # Use America/Chicago as a safe central US default.
     return "America/Chicago"
 
@@ -7145,7 +7206,7 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
         logger.info("tier_fallback tier=chrome_cdp domain=%s user=%s", scraped_hostname, caller_user_id)
         proxy_list = _get_cdp_proxy_list()
         cdp_result = None
-        proxy_attempts = [3, 2, 1]
+        proxy_attempts = [1, 3, 2, 2, 2]
         try:
             cached = _get_cached_cdp_result(scraped_hostname, product.url)
             if cached and cached.get("price"):
@@ -7166,7 +7227,9 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
 
                     if cdp_result is None:
                         for proxy_idx, proxy_cfg in enumerate(proxy_list):
-                            proxy_label = "direct" if proxy_cfg is None else ("primary_proxy" if proxy_idx == 0 else "fallback_proxy")
+                            proxy_label = _get_proxy_label(proxy_cfg)
+                            if proxy_label == "unknown_proxy":
+                                proxy_label = f"proxy_{proxy_idx}"
                             is_last_proxy = proxy_idx == len(proxy_list) - 1
                             attempts_for_this_proxy = proxy_attempts[proxy_idx] if proxy_idx < len(proxy_attempts) else 1
                             try:
@@ -7304,8 +7367,10 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
     if CAMOUFOX_BROKER_URL and _camoufox_broker_healthy():
         _touch_camoufox_idle_timer()
         logger.info("tier_fallback tier=camoufox domain=%s user=%s", scraped_hostname, caller_user_id)
-        proxy_list = [p for p in _get_cdp_proxy_list() if p is not None]
+        proxy_list = _get_camoufox_proxy_list()
         for proxy_url_str in proxy_list:
+            fox_proxy_label = _get_proxy_label(proxy_url_str)
+            logger.info("camoufox_proxy_attempt proxy=%s domain=%s", fox_proxy_label, scraped_hostname)
             fox_result = _scrape_with_camoufox(
                 product.url,
                 proxy_url=proxy_url_str,
@@ -7558,6 +7623,9 @@ def aci_status(user: User = Depends(get_current_user)):
         "idle_timeout_seconds": ACI_IDLE_TIMEOUT_SECONDS,
         "proxy_primary_configured": bool(CDP_PROXY_PRIMARY_URL.strip()),
         "proxy_fallback_configured": bool(CDP_PROXY_FALLBACK_URL.strip()),
+        "proxy_isp_1_configured": bool(CDP_PROXY_ISP_URL.strip() if CDP_PROXY_ISP_URL else False),
+        "proxy_isp_2_configured": bool(CDP_PROXY_ISP_URL_2.strip() if CDP_PROXY_ISP_URL_2 else False),
+        "proxy_isp_3_configured": bool(CDP_PROXY_ISP_URL_3.strip() if CDP_PROXY_ISP_URL_3 else False),
         "proxy_enabled": CDP_PROXY_ENABLED,
     }
 
