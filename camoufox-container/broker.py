@@ -30,7 +30,7 @@ import logging
 import os
 import random
 import time
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -97,26 +97,18 @@ def _sync_scrape(url: str, proxy: Optional[str], timeout_ms: int) -> dict:
     )
     start = time.time()
     # Traffic mix: mostly Windows desktop, some macOS (BrowserForge aligns fingerprints per OS).
-    _os = random.choices(["windows", "macos"], weights=[4, 1], k=1)[0]
+    _os = random.choices(["windows", "macos", "linux"], weights=[5, 2, 1], k=1)[0]
 
     with Camoufox(
-        # --- Headless mode ---
-        # "virtual" = runs headful browser inside Xvfb virtual display.
-        # Anti-bots that detect headless=True cannot detect this.
-        # DataDome, CreepJS confirmed to miss virtual display mode.
         headless=HEADLESS_MODE,
         proxy=proxy_config,
-        # --- Built-in C++ stealth ---
-        humanize=True,              # C++ Bezier mouse curves, distance-aware
+        humanize=round(random.uniform(1.5, 3.0), 1),
         os=_os,
-        geoip=True if proxy_config else False,  # Auto timezone/locale from proxy IP
-        block_webrtc=True,          # Prevent real IP leak
-        # --- Browser behavior ---
-        enable_cache=True,          # Cache homepage assets during warmup (realistic)
-        disable_coop=True,          # Allow Cloudflare Turnstile iframe interaction
-        locale="en-US",             # Fallback locale (geoip overrides when proxy set)
-        # DON'T set screen/viewport/window — BrowserForge auto-generates
-        # consistent dimensions matching the OS/device fingerprint.
+        geoip=True if proxy_config else False,
+        block_webrtc=True,
+        enable_cache=True,
+        disable_coop=True,
+        locale="en-US",
     ) as browser:
         page = browser.new_page()
         try:
@@ -148,11 +140,13 @@ def _sync_scrape(url: str, proxy: Optional[str], timeout_ms: int) -> dict:
             if warmup_ok:
                 product_referer = homepage
             else:
+                _domain_for_ref = parsed_url.netloc or "product"
                 product_referer = random.choice(
                     (
-                        "https://www.google.com/",
-                        "https://www.bing.com/",
-                        "https://duckduckgo.com/",
+                        f"https://www.google.com/search?q={quote(_domain_for_ref)}",
+                        f"https://www.google.com/search?q={quote(_domain_for_ref)}+deals",
+                        f"https://www.bing.com/search?q={quote(_domain_for_ref)}",
+                        f"https://duckduckgo.com/?q={quote(_domain_for_ref)}",
                     )
                 )
 
@@ -175,7 +169,14 @@ def _sync_scrape(url: str, proxy: Optional[str], timeout_ms: int) -> dict:
                     referer=product_referer,
                 )
 
-            # --- STEP 3: Wait for price elements ---
+            # --- STEP 3: Dismiss cookie banners ASAP ---
+            # Real users dismiss overlays within ~1s of them appearing.
+            # Doing this before price wait also prevents overlays from
+            # blocking visibility checks on price elements underneath.
+            time.sleep(random.uniform(0.4, 0.9))  # Brief human reaction time
+            _dismiss_cookie_banner(page)
+
+            # --- STEP 4: Wait for price elements (now unobstructed) ---
             try:
                 page.wait_for_selector(
                     '[itemprop="price"], [data-price], .a-price, '
@@ -185,21 +186,52 @@ def _sync_scrape(url: str, proxy: Optional[str], timeout_ms: int) -> dict:
             except Exception:
                 pass
 
-            # Human reading delay
-            time.sleep(random.uniform(1.0, 2.5))
+            # Human reading delay (user scans the price area)
+            time.sleep(random.uniform(0.8, 2.0))
 
-            # --- STEP 4: Dismiss cookie banners ---
-            _dismiss_cookie_banner(page)
-
-            # --- STEP 5: Scroll for lazy-loaded content ---
-            # humanize=True handles mouse movement at C++ level,
-            # but scroll events need explicit calls.
+            # --- STEP 5: Scroll for lazy-loaded content (enhanced) ---
+            # humanize handles mouse movement at C++ level,
+            # but scroll events and accompanying mouse position need explicit calls.
             try:
-                scroll_amount = random.randint(300, 600)
-                page.mouse.wheel(0, scroll_amount)
-                time.sleep(random.uniform(0.5, 1.0))
-                page.mouse.wheel(0, -random.randint(100, scroll_amount // 2))
-                time.sleep(random.uniform(0.3, 0.6))
+                vp = page.viewport_size or {"width": 1280, "height": 800}
+                vp_w = vp.get("width", 1280)
+                vp_h = vp.get("height", 800)
+
+                # Move mouse to a visible area before scrolling (DataDome checks this)
+                page.mouse.move(
+                    random.randint(int(vp_w * 0.2), int(vp_w * 0.8)),
+                    random.randint(int(vp_h * 0.3), int(vp_h * 0.7)),
+                )
+                time.sleep(random.uniform(0.1, 0.3))
+
+                # Phase 1: Quick scroll down to find price area
+                scroll_1 = random.randint(350, 700)
+                page.mouse.wheel(0, scroll_1)
+                time.sleep(random.uniform(0.4, 0.9))
+
+                # Phase 2: Read pause
+                time.sleep(random.uniform(0.5, 1.5))
+
+                # Phase 3: Slow detail scroll (40% chance)
+                if random.random() < 0.4:
+                    for _ in range(random.randint(1, 3)):
+                        page.mouse.move(
+                            random.randint(int(vp_w * 0.15), int(vp_w * 0.85)),
+                            random.randint(int(vp_h * 0.2), int(vp_h * 0.8)),
+                        )
+                        time.sleep(random.uniform(0.05, 0.15))
+                        page.mouse.wheel(0, random.randint(80, 250))
+                        time.sleep(random.uniform(0.4, 1.2))
+
+                # Phase 4: Scroll back up toward price (65% chance)
+                if random.random() < 0.65:
+                    page.mouse.wheel(0, -random.randint(120, max(150, scroll_1 // 2)))
+                    time.sleep(random.uniform(0.3, 0.7))
+
+                # Phase 5: Small jitter (20% chance — reading adjustment)
+                if random.random() < 0.2:
+                    page.mouse.wheel(0, random.randint(-40, 40))
+                    time.sleep(random.uniform(0.15, 0.35))
             except Exception:
                 pass
 
@@ -228,7 +260,7 @@ def _sync_scrape(url: str, proxy: Optional[str], timeout_ms: int) -> dict:
 
 
 def _dismiss_cookie_banner(page) -> None:
-    """Try to dismiss cookie consent banners."""
+    """Try to dismiss cookie consent banners with human-like interaction."""
     selectors = [
         "#onetrust-accept-btn-handler",
         "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
@@ -248,11 +280,27 @@ def _dismiss_cookie_banner(page) -> None:
         "I Accept", "Got it", "OK", "I Agree",
     ]
 
+    def _human_click(el):
+        """Move mouse to element, brief pause, then click."""
+        try:
+            box = el.bounding_box()
+            if box:
+                x = box["x"] + random.uniform(box["width"] * 0.2, box["width"] * 0.8)
+                y = box["y"] + random.uniform(box["height"] * 0.2, box["height"] * 0.8)
+                page.mouse.move(x, y)
+                time.sleep(random.uniform(0.08, 0.2))
+            el.click()
+        except Exception:
+            try:
+                el.click()
+            except Exception:
+                pass
+
     for sel in selectors:
         try:
             el = page.query_selector(sel)
             if el and el.is_visible():
-                el.click()
+                _human_click(el)
                 time.sleep(random.uniform(0.3, 0.5))
                 return
         except Exception:
@@ -262,7 +310,7 @@ def _dismiss_cookie_banner(page) -> None:
         try:
             el = page.query_selector(f"button:has-text('{text}')")
             if el and el.is_visible():
-                el.click()
+                _human_click(el)
                 time.sleep(random.uniform(0.3, 0.5))
                 return
         except Exception:

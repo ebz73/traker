@@ -243,6 +243,25 @@ CDP_PROXY_ENABLED = (
 # Optional: override Playwright user agent for CDP (must match remote Chrome major version or omit).
 CDP_USER_AGENT = os.getenv("CDP_USER_AGENT", "").strip()
 
+# Tier 4a: rotate UA strings — a single static UA from all IPs is a bot cluster signal.
+# Update these periodically to match current Chrome stable releases.
+_CHROME_UA_POOL = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+]
+
+
+def _pick_user_agent() -> str:
+    """Pick a random current Chrome UA, or use env override if set."""
+    if CDP_USER_AGENT:
+        return CDP_USER_AGENT
+    return random.choice(_CHROME_UA_POOL)
+
 # --- ACI Container Management ---
 _ACI_CLIENT: Optional[Any] = None
 _ACI_CLIENT_LOCK = threading.Lock()
@@ -1403,6 +1422,13 @@ async def lifespan(app: FastAPI):
                 db.commit()
     except SQLAlchemyError as exc:
         logger.exception("Database initialization failed: %s", exc)
+
+    _cleanup_stale_cdp_storage(max_age_hours=12)
+    app.state.storage_cleanup_thread = threading.Thread(
+        target=_periodic_storage_cleanup,
+        daemon=True,
+    )
+    app.state.storage_cleanup_thread.start()
 
     try:
         yield
@@ -3213,7 +3239,9 @@ _BOT_TITLE_MARKERS = [
     "just a moment", "checking your browser", "attention required",
     "verify you are human", "security check", "security verification",
     "security challenge", "access denied", "please wait", "one more step",
-    "cloudflare", "captcha", "robot",
+    "cloudflare", "captcha", "robot", "pardon our interruption",
+    "verify your identity", "human verification", "are you a robot",
+    "ray id", "complete the security check",
 ]
 _CAPTCHA_TEXT_MARKERS = [
     "verify you are human", "press & hold", "robot or human",
@@ -3224,6 +3252,9 @@ _CAPTCHA_TEXT_MARKERS = [
     "attention required", "enable javascript and cookies",
     "access to this page has been denied",
     "unusual traffic from your computer",
+    "turnstile", "managed challenge", "slide to verify",
+    "verify it's you", "human check", "cf-challenge-running",
+    "press and hold the button",
 ]
 _BLOCKED_TEXT_MARKERS = [
     "sorry, you have been blocked", "blocked your ip",
@@ -3678,6 +3709,95 @@ _CDP_DOMAIN_LOCKS_GUARD = threading.Lock()
 _CDP_DOMAIN_RESULTS: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 CDP_RESULT_CACHE_SECONDS = float(os.getenv("CDP_RESULT_CACHE_SECONDS", "30"))
 
+# ── Per-domain fingerprint consistency ─────────────────────────────────────
+# Maintain a stable fingerprint per domain for a TTL window so repeat visits
+# to the same site look like the same user returning.
+_DOMAIN_FINGERPRINTS: Dict[str, Tuple[Dict[str, Any], float]] = {}
+_DOMAIN_FINGERPRINT_LOCK = threading.Lock()
+_FINGERPRINT_TTL_SECONDS = float(os.getenv("FINGERPRINT_TTL_SECONDS", "1800"))  # 30 min default
+
+# ── CDP storage state persistence ──────────────────────────────────────────
+_CDP_STORAGE_DIR = os.getenv("CDP_STORAGE_DIR", "/tmp/cdp-storage")
+os.makedirs(_CDP_STORAGE_DIR, exist_ok=True)
+
+
+def _get_or_create_domain_fingerprint(domain: str) -> Dict[str, Any]:
+    """Return a stable fingerprint dict for *domain*, creating one if expired or absent."""
+    now = time.time()
+    with _DOMAIN_FINGERPRINT_LOCK:
+        if domain in _DOMAIN_FINGERPRINTS:
+            fp, created_at = _DOMAIN_FINGERPRINTS[domain]
+            if now - created_at < _FINGERPRINT_TTL_SECONDS:
+                return fp
+        w, h = _pick_viewport()
+        chrome_ui = random.randint(72, 140)
+        fp: Dict[str, Any] = {
+            "viewport_w": w,
+            "viewport_h": h,
+            "screen_h": min(h + chrome_ui, h + 200),
+            "user_agent": _pick_user_agent(),
+            "device_scale_factor": random.choices([1, 1.25, 1.5, 2], weights=[60, 10, 10, 20], k=1)[0],
+            "color_scheme": "light",
+        }
+        _DOMAIN_FINGERPRINTS[domain] = (fp, now)
+        return fp
+
+
+def _cdp_storage_state_path(domain: str, proxy_label: str) -> str:
+    """Return the path where Playwright storage state is saved for a domain+proxy."""
+    import hashlib
+
+    key = hashlib.md5(f"{domain}:{proxy_label}".encode()).hexdigest()[:12]
+    return os.path.join(_CDP_STORAGE_DIR, f"{key}.json")
+
+
+def _load_cdp_storage_state(domain: str, proxy_label: str) -> Optional[str]:
+    """Load saved storage state path if it exists and is fresh (< 4 hours)."""
+    path = _cdp_storage_state_path(domain, proxy_label)
+    if not os.path.exists(path):
+        return None
+    try:
+        age = time.time() - os.path.getmtime(path)
+        if age > 14400:
+            os.remove(path)
+            return None
+        return path
+    except Exception:
+        return None
+
+
+def _save_cdp_storage_state(context, domain: str, proxy_label: str) -> None:
+    """Persist cookies/localStorage from the current context for future reuse."""
+    try:
+        path = _cdp_storage_state_path(domain, proxy_label)
+        context.storage_state(path=path)
+        logger.debug("CDP storage state saved for domain=%s proxy=%s", domain, proxy_label)
+    except Exception as exc:
+        logger.debug("Failed to save CDP storage state: %s", exc)
+
+
+def _cleanup_stale_cdp_storage(max_age_hours: int = 12) -> None:
+    """Remove storage state files older than max_age_hours."""
+    try:
+        now = time.time()
+        cutoff = max_age_hours * 3600
+        for fname in os.listdir(_CDP_STORAGE_DIR):
+            fpath = os.path.join(_CDP_STORAGE_DIR, fname)
+            if os.path.isfile(fpath) and (now - os.path.getmtime(fpath)) > cutoff:
+                os.remove(fpath)
+    except Exception:
+        pass
+
+
+def _periodic_storage_cleanup():
+    """Background thread that cleans stale storage every 30 minutes."""
+    while True:
+        time.sleep(1800)
+        try:
+            _cleanup_stale_cdp_storage(max_age_hours=12)
+        except Exception:
+            pass
+
 
 def _get_domain_cdp_lock(domain: str) -> threading.Lock:
     """Get or create a per-domain lock for CDP concurrency control."""
@@ -4117,65 +4237,190 @@ def _timezone_for_proxy(proxy_config: Optional[dict]) -> str:
     return "America/Chicago"
 
 
-# Tier 4a: vary desktop geometry — default 1280×720-only traffic is a common bot cluster signal.
-_CDP_VIEWPORT_PRESETS: Tuple[Tuple[int, int], ...] = (
-    (1920, 1080),
-    (1536, 864),
-    (1440, 900),
-    (1366, 768),
-    (1280, 720),
-)
+# Tier 4a: vary desktop geometry — weighted by real-world StatCounter distribution.
+_CDP_VIEWPORT_PRESETS: List[Tuple[int, int, int]] = [
+    # (width, height, weight)
+    (1920, 1080, 23),
+    (1366, 768, 15),
+    (1536, 864, 10),
+    (1440, 900, 7),
+    (1280, 720, 5),
+    (2560, 1440, 4),
+    (1600, 900, 3),
+    (1280, 800, 3),
+]
+
+
+def _pick_viewport() -> Tuple[int, int]:
+    sizes = [(w, h) for w, h, _ in _CDP_VIEWPORT_PRESETS]
+    weights = [wt for _, _, wt in _CDP_VIEWPORT_PRESETS]
+    return random.choices(sizes, weights=weights, k=1)[0]
 
 # Run before page scripts (Tier 4a CDP). Keep small — real Chrome already looks legitimate over CDP.
 _CDP_STEALTH_INIT_JS = """
 (() => {
+  // Clean ChromeDriver artifacts (shared Chrome instances may have residual vars)
   try {
-    Object.defineProperty(navigator, 'webdriver', { get: () => undefined, configurable: true });
-  } catch (e) {}
-  try {
-    for (const k of Object.keys(window)) {
-      if (k.startsWith('cdc_')) {
-        try { delete window[k]; } catch (e) {}
+    const keys = Object.keys(window);
+    for (let i = 0; i < keys.length; i++) {
+      if (keys[i].startsWith('cdc_') || keys[i].startsWith('__webdriver')) {
+        try { delete window[keys[i]]; } catch (e) {}
       }
+    }
+  } catch (e) {}
+
+  // Patch Permissions API to return realistic values
+  try {
+    const originalQuery = window.navigator.permissions.query;
+    window.navigator.permissions.query = (parameters) =>
+      parameters.name === 'notifications'
+        ? Promise.resolve({ state: Notification.permission })
+        : originalQuery(parameters);
+  } catch (e) {}
+
+  // Ensure chrome.runtime exists (missing = headless signal)
+  try {
+    if (!window.chrome) window.chrome = {};
+    if (!window.chrome.runtime) {
+      window.chrome.runtime = {
+        connect: function() {},
+        sendMessage: function() {},
+      };
+    }
+  } catch (e) {}
+
+  // Patch plugins array (headless Chrome has 0 plugins)
+  try {
+    if (navigator.plugins.length === 0) {
+      Object.defineProperty(navigator, 'plugins', {
+        get: () => {
+          const arr = [
+            { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format', length: 1 },
+            { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '', length: 1 },
+            { name: 'Native Client', filename: 'internal-nacl-plugin', description: '', length: 2 },
+          ];
+          arr.item = (i) => arr[i] || null;
+          arr.namedItem = (n) => arr.find(p => p.name === n) || null;
+          arr.refresh = () => {};
+          return arr;
+        },
+      });
+    }
+  } catch (e) {}
+
+  // Patch languages if empty (headless signal)
+  try {
+    if (!navigator.languages || navigator.languages.length === 0) {
+      Object.defineProperty(navigator, 'languages', {
+        get: () => ['en-US', 'en'],
+      });
     }
   } catch (e) {}
 })();
 """
 
+_CDP_CANVAS_NOISE_JS = """
+(() => {
+  // Add tiny pixel noise to canvas fingerprinting calls to vary the hash per session.
+  // Uses a cloned canvas so the visible page content is never altered.
+  const _seed = Math.random() * 0xFFFF | 0;
+  const _origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+  const _origToBlob = HTMLCanvasElement.prototype.toBlob;
 
-def _build_cdp_playwright_context_kwargs(proxy_config: Optional[dict]) -> dict:
-    """Playwright context options aligned with timezone/proxy (Tier 4a)."""
-    w, h = random.choice(_CDP_VIEWPORT_PRESETS)
-    chrome_ui = random.randint(72, 140)
+  function _applyNoise(sourceCanvas, seed) {
+    try {
+      if (!sourceCanvas || sourceCanvas.width < 16 || sourceCanvas.height < 16) return null;
+      const clone = document.createElement('canvas');
+      clone.width = sourceCanvas.width;
+      clone.height = sourceCanvas.height;
+      const cloneCtx = clone.getContext('2d');
+      if (!cloneCtx) return null;
+      cloneCtx.drawImage(sourceCanvas, 0, 0);
+      const img = cloneCtx.getImageData(0, 0, clone.width, clone.height);
+      const d = img.data;
+      const changes = 2 + (seed % 3);
+      for (let i = 0; i < changes; i++) {
+        const idx = ((seed + i * 7) % (d.length / 4)) * 4;
+        d[idx] = (d[idx] + (i % 2 === 0 ? 1 : -1) + 256) % 256;
+      }
+      cloneCtx.putImageData(img, 0, 0);
+      return clone;
+    } catch(e) { return null; }
+  }
+
+  HTMLCanvasElement.prototype.toDataURL = function() {
+    const clone = _applyNoise(this, _seed);
+    if (clone) return _origToDataURL.apply(clone, arguments);
+    return _origToDataURL.apply(this, arguments);
+  };
+
+  HTMLCanvasElement.prototype.toBlob = function(callback) {
+    const clone = _applyNoise(this, _seed);
+    if (clone) return _origToBlob.apply(clone, arguments);
+    return _origToBlob.apply(this, arguments);
+  };
+})();
+"""
+
+
+def _build_cdp_playwright_context_kwargs(proxy_config: Optional[dict], domain: Optional[str] = None) -> dict:
+    """Playwright context options aligned with timezone/proxy (Tier 4a).
+    If domain is provided, uses a per-domain stable fingerprint."""
+    if domain:
+        fp = _get_or_create_domain_fingerprint(domain)
+        w = fp["viewport_w"]
+        h = fp["viewport_h"]
+        screen_h = fp["screen_h"]
+        ua = fp["user_agent"]
+        dsf = fp["device_scale_factor"]
+        color_scheme = fp.get("color_scheme", "light")
+    else:
+        w, h = _pick_viewport()
+        screen_h = min(h + random.randint(72, 140), h + 200)
+        ua = _pick_user_agent()
+        dsf = random.choices([1, 1.25, 1.5, 2], weights=[60, 10, 10, 20], k=1)[0]
+        color_scheme = "light"
+
     kwargs: Dict[str, Any] = dict(
         locale="en-US",
         timezone_id=_timezone_for_proxy(proxy_config),
         java_script_enabled=True,
         viewport={"width": w, "height": h},
-        screen={"width": w, "height": min(h + chrome_ui, h + 200)},
-        color_scheme="light",
+        screen={"width": w, "height": screen_h},
+        color_scheme=color_scheme,
         reduced_motion="no-preference",
         forced_colors="none",
-        device_scale_factor=1,
+        device_scale_factor=dsf,
         has_touch=False,
         is_mobile=False,
+        user_agent=ua,
         extra_http_headers={
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
             "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br, zstd",
+            "DNT": "1",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
         },
     )
-    if CDP_USER_AGENT:
-        kwargs["user_agent"] = CDP_USER_AGENT
     if proxy_config:
         kwargs["proxy"] = proxy_config
     return kwargs
 
 
 def _cdp_attach_stealth_init(context) -> None:
-    """Attach minimal stealth init script to a Playwright browser context."""
+    """Attach stealth init scripts to a Playwright browser context."""
     try:
         context.add_init_script(_CDP_STEALTH_INIT_JS)
     except Exception as exc:
         logger.debug("CDP stealth init script attach failed: %s", exc)
+    try:
+        context.add_init_script(_CDP_CANVAS_NOISE_JS)
+    except Exception as exc:
+        logger.debug("CDP canvas noise script attach failed: %s", exc)
 
 
 def _get_cdp_browser():
@@ -5940,63 +6185,111 @@ def _bezier_points(p0, p1, p2, p3, steps: int = 20):
 
 
 def _simulate_human_behavior(page, duration_seconds: float = 2.0) -> None:
-    """Simulate realistic human interaction using Bezier mouse paths and randomised scrolling."""
+    """Simulate realistic human interaction with randomised behavior ordering."""
     start = time.time()
     try:
         vp = page.viewport_size() or {"width": 1280, "height": 800}
-    except Exception as exc:
-        logger.debug("Failed to read viewport size for behavior simulation: %s", exc)
+    except Exception:
         vp = {"width": 1280, "height": 800}
     W, H = vp["width"], vp["height"]
 
-    def rand_point():
-        return (random.randint(int(W * 0.1), int(W * 0.9)),
-                random.randint(int(H * 0.1), int(H * 0.9)))
+    _cur = [W // 2, H // 2]
 
-    _current_pos = [W // 2, H // 2]
+    def _rand_pt():
+        return (
+            random.randint(int(W * 0.1), int(W * 0.9)),
+            random.randint(int(H * 0.1), int(H * 0.9)),
+        )
 
-    def bezier_move(dst):
-        src_x, src_y = _current_pos
-        dx, dy = dst[0] - src_x, dst[1] - src_y
-        cp1 = (src_x + dx * 0.25 + random.randint(-60, 60),
-               src_y + dy * 0.25 + random.randint(-60, 60))
-        cp2 = (src_x + dx * 0.75 + random.randint(-60, 60),
-               src_y + dy * 0.75 + random.randint(-60, 60))
-        steps = random.randint(12, 28)
-        for (px, py) in _bezier_points((src_x, src_y), cp1, cp2, dst, steps):
+    def _bz_move(dst):
+        sx, sy = _cur
+        dx, dy = dst[0] - sx, dst[1] - sy
+        cp1 = (
+            sx + dx * 0.25 + random.randint(-60, 60),
+            sy + dy * 0.25 + random.randint(-60, 60),
+        )
+        cp2 = (
+            sx + dx * 0.75 + random.randint(-60, 60),
+            sy + dy * 0.75 + random.randint(-60, 60),
+        )
+        steps = random.randint(10, 25)
+        for px, py in _bezier_points((sx, sy), cp1, cp2, dst, steps):
             try:
                 page.mouse.move(px, py)
-            except Exception as exc:
-                logger.debug("Mouse movement failed during behavior simulation: %s", exc)
-                break
-            if random.random() < 0.08:
-                time.sleep(random.uniform(0.01, 0.04))
-        _current_pos[0], _current_pos[1] = dst[0], dst[1]
+            except Exception:
+                return
+            if random.random() < 0.07:
+                time.sleep(random.uniform(0.008, 0.035))
+        _cur[0], _cur[1] = dst
 
-    for _ in range(random.randint(3, 5)):
-        bezier_move(rand_point())
-        time.sleep(random.uniform(0.06, 0.15))
+    def _do_moves(n):
+        for _ in range(n):
+            _bz_move(_rand_pt())
+            time.sleep(random.uniform(0.04, 0.12))
 
-    scroll_down = random.randint(300, 700)
-    page.mouse.wheel(0, scroll_down)
-    time.sleep(random.uniform(0.3, 0.6))
+    def _do_scroll_down():
+        page.mouse.wheel(0, random.randint(250, 650))
+        time.sleep(random.uniform(0.25, 0.55))
 
-    for _ in range(random.randint(2, 4)):
-        bezier_move(rand_point())
-        time.sleep(random.uniform(0.05, 0.12))
+    def _do_scroll_up():
+        page.mouse.wheel(0, -random.randint(60, 300))
+        time.sleep(random.uniform(0.15, 0.35))
 
-    page.mouse.wheel(0, -random.randint(80, int(scroll_down * 0.6)))
-    time.sleep(random.uniform(0.15, 0.35))
+    def _do_idle():
+        time.sleep(random.uniform(0.3, 1.2))
 
-    price_area = (random.randint(int(W * 0.3), int(W * 0.7)),
-                  random.randint(int(H * 0.2), int(H * 0.5)))
-    bezier_move(price_area)
-    time.sleep(random.uniform(0.2, 0.45))
+    def _do_hover():
+        """Try to hover over a random visible link — mimics reading nav."""
+        try:
+            links = page.locator("a:visible").all()
+            if links:
+                target = random.choice(links[:8])
+                box = target.bounding_box(timeout=500)
+                if box:
+                    _bz_move(
+                        (
+                            int(box["x"] + box["width"] / 2),
+                            int(box["y"] + box["height"] / 2),
+                        )
+                    )
+                    time.sleep(random.uniform(0.1, 0.3))
+        except Exception:
+            pass
+
+    actions = []
+    actions.append(lambda: _do_moves(random.randint(1, 3)))
+
+    if random.random() < 0.7:
+        actions.append(_do_scroll_down)
+    if random.random() < 0.4:
+        actions.append(_do_hover)
+    if random.random() < 0.5:
+        actions.append(lambda: _do_moves(random.randint(1, 2)))
+    if random.random() < 0.5:
+        actions.append(_do_scroll_up)
+    if random.random() < 0.35:
+        actions.append(_do_idle)
+    if random.random() < 0.6:
+        price_area = (
+            random.randint(int(W * 0.25), int(W * 0.7)),
+            random.randint(int(H * 0.15), int(H * 0.45)),
+        )
+        actions.append(lambda pa=price_area: _bz_move(pa))
+
+    first = actions[0]
+    rest = actions[1:]
+    random.shuffle(rest)
+    actions = [first] + rest
+
+    for action in actions:
+        if time.time() - start > duration_seconds:
+            break
+        action()
 
     elapsed = time.time() - start
     remaining = duration_seconds - elapsed
     if remaining > 0.1:
-        time.sleep(min(remaining, duration_seconds))
+        time.sleep(min(remaining, duration_seconds * 0.3))
 
 
 def _wait_for_real_content(page, timeout_seconds: int = 15) -> bool:
@@ -6078,6 +6371,7 @@ def _scrape_with_chrome_cdp(
     """Scrape price using the remote Chrome container via CDP."""
     max_attempts = max_attempts_override if max_attempts_override is not None else int(os.getenv("SCRAPE_MAX_ATTEMPTS", "3"))
     scraped_domain = _get_domain(url)
+    storage_proxy_label = _get_proxy_label(proxy_url)
     if not skip_captcha_check:
         cooldown_info = _get_domain_cooldown_info(scraped_domain)
         if cooldown_info:
@@ -6165,7 +6459,11 @@ def _scrape_with_chrome_cdp(
 
         try:
             if not per_attempt_context:
-                _context_kwargs = _build_cdp_playwright_context_kwargs(proxy_config)
+                _context_kwargs = _build_cdp_playwright_context_kwargs(proxy_config, domain=scraped_domain)
+                _storage_path = _load_cdp_storage_state(scraped_domain, storage_proxy_label)
+                if _storage_path:
+                    _context_kwargs["storage_state"] = _storage_path
+                    logger.debug("CDP reusing stored cookies for domain=%s", scraped_domain)
                 shared_context = browser.new_context(**_context_kwargs)
                 _cdp_attach_stealth_init(shared_context)
 
@@ -6181,7 +6479,11 @@ def _scrape_with_chrome_cdp(
                     try:
                         # For per-attempt contexts, generate a fresh sticky session per attempt.
                         attempt_proxy = _make_sticky_proxy_config(proxy_url) if proxy_url else proxy_config
-                        _context_kwargs = _build_cdp_playwright_context_kwargs(attempt_proxy)
+                        _context_kwargs = _build_cdp_playwright_context_kwargs(attempt_proxy, domain=scraped_domain)
+                        _storage_path = _load_cdp_storage_state(scraped_domain, storage_proxy_label)
+                        if _storage_path:
+                            _context_kwargs["storage_state"] = _storage_path
+                            logger.debug("CDP reusing stored cookies for domain=%s", scraped_domain)
                         context = browser.new_context(**_context_kwargs)
                         _cdp_attach_stealth_init(context)
                     except Exception as exc:
@@ -6208,18 +6510,74 @@ def _scrape_with_chrome_cdp(
                                 _handle_cookie_banner(page, url=homepage)
                                 _anti_bot_sleep(0.15, 0.55)
                                 referer = homepage
+                                # Intent simulation for aggressive domains:
+                                # After warmup, interact with search or a nav element
+                                # before navigating to the product URL.
+                                if _url_matches_any_domain(url, BOT_AGGRESSIVE_DOMAINS) and random.random() < 0.5:
+                                    try:
+                                        _search_sels = [
+                                            'input[type="search"]',
+                                            '[role="search"] input',
+                                            'input[name="q"]',
+                                            'input[id*="search" i]',
+                                            'input[placeholder*="search" i]',
+                                            'input[aria-label*="search" i]',
+                                        ]
+                                        search_el = None
+                                        for _ss in _search_sels:
+                                            try:
+                                                _loc = page.locator(_ss)
+                                                if _loc.count() > 0 and _loc.first.is_visible(timeout=1000):
+                                                    search_el = _loc.first
+                                                    break
+                                            except Exception:
+                                                continue
+
+                                        if search_el:
+                                            search_el.click(timeout=2000)
+                                            _anti_bot_sleep(0.3, 0.7)
+                                            _domain_short = scraped_domain.split(".")[0]
+                                            _partial = _domain_short[:random.randint(2, 4)]
+                                            for _ch in _partial:
+                                                page.keyboard.type(_ch, delay=random.randint(60, 180))
+                                            _anti_bot_sleep(0.4, 0.9)
+                                            page.keyboard.press("Escape")
+                                            _anti_bot_sleep(0.2, 0.5)
+                                        else:
+                                            try:
+                                                _nav_links = page.locator("nav a:visible, header a:visible").all()
+                                                if _nav_links and len(_nav_links) > 2:
+                                                    _pick = random.choice(_nav_links[:6])
+                                                    _pick.click(timeout=3000)
+                                                    _anti_bot_sleep(1.0, 2.5)
+                                                    page.go_back(timeout=10000)
+                                                    _anti_bot_sleep(0.3, 0.8)
+                                            except Exception:
+                                                pass
+                                    except Exception as _intent_exc:
+                                        logger.debug("Intent simulation failed: %s", _intent_exc)
                             except Exception as wexc:
                                 logger.debug("CDP homepage warmup failed: %s", wexc)
+                                _domain_for_ref = urlparse(url).netloc or "product"
                                 referer = random.choice(
-                                    (
-                                        "https://www.google.com/",
-                                        "https://www.bing.com/",
-                                        "https://duckduckgo.com/",
-                                    )
+                                    [
+                                        f"https://www.google.com/search?q={quote(_domain_for_ref)}",
+                                        f"https://www.google.com/search?q={quote(_domain_for_ref)}+deals",
+                                        f"https://www.bing.com/search?q={quote(_domain_for_ref)}",
+                                        f"https://duckduckgo.com/?q={quote(_domain_for_ref)}",
+                                    ]
                                 )
-                        # Prefer "load" over "networkidle" — the latter is a frequent automation fingerprint.
-                        wait_strategy = "load"
-                        goto_kw: Dict[str, Any] = {"wait_until": wait_strategy, "timeout": 90000}
+                        # Update Sec-Fetch-Site based on navigation origin
+                        if referer:
+                            try:
+                                _fetch_site = "same-origin" if referer == homepage else "cross-site"
+                                page.set_extra_http_headers({
+                                    "Sec-Fetch-Site": _fetch_site,
+                                })
+                            except Exception:
+                                pass
+                        wait_strategy = "domcontentloaded"
+                        goto_kw: Dict[str, Any] = {"wait_until": wait_strategy, "timeout": 60000}
                         if referer:
                             goto_kw["referer"] = referer
                         response = page.goto(url, **goto_kw)
@@ -6238,13 +6596,6 @@ def _scrape_with_chrome_cdp(
                                 pass
                             had_captcha = True
                             continue
-                        try:
-                            page.wait_for_selector(
-                                '[itemprop="price"], [data-price], .a-price, [class*="price"]',
-                                timeout=8000,
-                            )
-                        except Exception as exc:
-                            logger.debug("Initial price selector wait failed on CDP page: %s", exc)
                     except Exception as e:
                         logger.debug("CDP page.goto failed on attempt %d: %s", attempt + 1, e)
                         continue
@@ -6263,6 +6614,9 @@ def _scrape_with_chrome_cdp(
                         logger.warning("CDP max wall time reached before popup handling for %s", url)
                         break
 
+                    # Dismiss popups/cookie banners BEFORE price wait —
+                    # consent walls can block rendering of price elements,
+                    # and real users dismiss overlays within ~1s of appearance.
                     handle_all_popups(page, url)
 
                     issues = _detect_page_issues(page)
@@ -6280,6 +6634,16 @@ def _scrape_with_chrome_cdp(
                             pass
                         had_captcha = True
                         continue
+
+                    # Now wait for price elements — overlays are dismissed,
+                    # consent walls are cleared, content should be rendering.
+                    try:
+                        page.wait_for_selector(
+                            '[itemprop="price"], [data-price], .a-price, [class*="price"]',
+                            timeout=8000,
+                        )
+                    except Exception as exc:
+                        logger.debug("Initial price selector wait failed on CDP page: %s", exc)
 
                     content_loaded = _wait_for_real_content(page, timeout_seconds=15)
                     if not content_loaded:
@@ -6366,6 +6730,7 @@ def _scrape_with_chrome_cdp(
                             site_name_text = _extract_site_name_from_soup(cdp_soup, url)
                         except Exception:
                             site_name_text = None
+                        _save_cdp_storage_state(context, scraped_domain, storage_proxy_label)
                         return {
                             "name": name_text,
                             "site_name": site_name_text,
@@ -7469,6 +7834,13 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
     else:
         logger.warning("tier_skip tier=chrome_cdp reason=unhealthy domain=%s user=%s", scraped_hostname, caller_user_id)
         _log_scrape_attempt(scraped_hostname, "chrome_cdp", False, fail_reason="unhealthy", user_id=caller_user_id)
+
+    # Add delay between engine switches — same domain hit from Chrome then Firefox in quick
+    # succession is suspicious to sites that correlate visits by IP range.
+    if cdp_was_captcha_blocked:
+        _cfox_delay = random.uniform(5.0, 15.0)
+        logger.info("Adding %.1fs delay before Camoufox attempt for domain=%s", _cfox_delay, scraped_hostname)
+        time.sleep(_cfox_delay)
 
     # Tier 4b: Camoufox (Firefox) — separate container, different browser engine
     if not CAMOUFOX_BROKER_URL or not _camoufox_broker_healthy():
