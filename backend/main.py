@@ -210,10 +210,11 @@ ENABLE_ACI_AUTO_START = os.getenv("ENABLE_ACI_AUTO_START", "true").lower() in ("
 
 # --- Azure Container Instance (on-demand Camoufox / Firefox) ---
 CAMOUFOX_ACI_IMAGE = os.getenv("CAMOUFOX_ACI_IMAGE", "ghcr.io/ebz73/traker-camoufox:latest")
-CAMOUFOX_ACI_CONTAINER_NAME = os.getenv("CAMOUFOX_ACI_CONTAINER_NAME", "traker-camoufox")
+CAMOUFOX_ACI_CONTAINER_NAME = os.getenv("CAMOUFOX_ACI_CONTAINER_NAME", "fx-worker-1")
 CAMOUFOX_ACI_CPU = float(os.getenv("CAMOUFOX_ACI_CPU", "1"))
 CAMOUFOX_ACI_MEMORY_GB = float(os.getenv("CAMOUFOX_ACI_MEMORY_GB", "2"))
 CAMOUFOX_BROKER_URL = os.getenv("CAMOUFOX_BROKER_URL", "")
+CAMOUFOX_BROKER_API_KEY = os.getenv("BROKER_API_KEY", "")
 _CAMOUFOX_ACI_STARTING = False
 _CAMOUFOX_ACI_STARTING_LOCK = threading.Lock()
 _CAMOUFOX_ACI_IDLE_TIMER: Optional[threading.Timer] = None
@@ -244,15 +245,18 @@ CDP_PROXY_ENABLED = (
 CDP_USER_AGENT = os.getenv("CDP_USER_AGENT", "").strip()
 
 # Tier 4a: rotate UA strings — a single static UA from all IPs is a bot cluster signal.
-# Update these periodically to match current Chrome stable releases.
+# Keep aligned with _CHROME_VERSION / _CHROME_FULL_VERSION used by HTTP-first tier.
 _CHROME_UA_POOL = [
+    # Windows (heaviest traffic)
+    f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{_CHROME_FULL_VERSION} Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+    # macOS
+    f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{_CHROME_FULL_VERSION} Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+    # Linux (small share)
+    f"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{_CHROME_FULL_VERSION} Safari/537.36",
 ]
 
 
@@ -460,7 +464,7 @@ def _update_cdp_url(ip: str):
     global CHROME_CDP_URL
     new_url = f"http://{ip}:3000"
     if CHROME_CDP_URL != new_url:
-        logger.info("Updating CHROME_CDP_URL: %s → %s", CHROME_CDP_URL, new_url)
+        logger.info("Chrome CDP URL updated (container IP changed)")
         CHROME_CDP_URL = new_url
         with _CDP_HEALTH_LOCK:
             _CDP_HEALTH_CACHE["value"] = None
@@ -577,6 +581,7 @@ def _create_camoufox_aci_container(client):
         ContainerGroup,
         ContainerGroupRestartPolicy,
         ContainerPort,
+        EnvironmentVariable,
         IpAddress,
         OperatingSystemTypes,
         Port,
@@ -591,6 +596,9 @@ def _create_camoufox_aci_container(client):
             requests=ResourceRequests(cpu=CAMOUFOX_ACI_CPU, memory_in_gb=CAMOUFOX_ACI_MEMORY_GB)
         ),
         ports=[ContainerPort(port=3001)],
+        environment_variables=[
+            EnvironmentVariable(name="BROKER_API_KEY", value=os.getenv("BROKER_API_KEY", "")),
+        ],
     )
 
     group = ContainerGroup(
@@ -615,7 +623,7 @@ def _update_camoufox_url(ip: str):
     global CAMOUFOX_BROKER_URL
     new_url = f"http://{ip}:3001"
     if CAMOUFOX_BROKER_URL != new_url:
-        logger.info("Updating CAMOUFOX_BROKER_URL: %s → %s", CAMOUFOX_BROKER_URL, new_url)
+        logger.info("Camoufox broker URL updated (container IP changed)")
         CAMOUFOX_BROKER_URL = new_url
 
 
@@ -3595,7 +3603,7 @@ _POPUP_CONTAINER_SELECTORS = [
     "[class*='modal']:not([class*='cookie'])",
     "[class*='Popup']:not([class*='cookie'])",
     "[class*='popup']:not([class*='cookie'])",
-    "[class*='overlay']:not([class*='cookie']):not([class*='product'])",
+    "[class*='overlay']:not([class*='cookie']):not([class*='product']):not([class*='image']):not([class*='video']):not([class*='loading']):not([class*='tooltip']):not([class*='hover'])",
     "[class*='email-signup']", "[class*='newsletter']", "[class*='subscribe']",
     "#attentive_overlay", ".attentive-creative", "#klaviyo-modal", ".klaviyo-form",
     ".privy-popup", "#privy-popup", ".optinmonster-optin", ".pum-container",
@@ -4149,14 +4157,12 @@ def _make_sticky_proxy_url_for_broker(proxy_url: Optional[str]) -> Optional[str]
     return _proxy_playwright_config_to_url(cfg)
 
 
-def _get_cdp_proxy_list() -> List[Optional[str]]:
+def _get_cdp_proxy_list() -> List[str]:
     """
     Proxy list for Chrome CDP (Tier 4a).
-    Order: direct -> residential cheap -> residential fallback -> ISP #1 -> ISP #3 (shared).
-    Direct goes first so we discover which domains work without proxy.
+    Order: residential cheap -> residential fallback -> ISP #1 -> ISP #3 (shared).
     """
-    proxies: List[Optional[str]] = []
-    proxies.append(None)
+    proxies: List[str] = []
     if CDP_PROXY_PRIMARY_URL and CDP_PROXY_PRIMARY_URL.strip():
         proxies.append(CDP_PROXY_PRIMARY_URL.strip())
     if CDP_PROXY_FALLBACK_URL and CDP_PROXY_FALLBACK_URL.strip():
@@ -4168,15 +4174,13 @@ def _get_cdp_proxy_list() -> List[Optional[str]]:
     return proxies
 
 
-def _get_camoufox_proxy_list() -> List[Optional[str]]:
+def _get_camoufox_proxy_list() -> List[str]:
     """
     Proxy list for Camoufox (Tier 4b).
-    Order: direct -> residential cheap -> residential fallback -> ISP #2 -> ISP #3 (shared).
-    Direct goes first so we discover which domains work without proxy on Camoufox.
+    Order: residential cheap -> residential fallback -> ISP #2 -> ISP #3 (shared).
     ISP #2 is dedicated to Camoufox (different IP than Chrome's ISP #1).
     """
-    proxies: List[Optional[str]] = []
-    proxies.append(None)
+    proxies: List[str] = []
     if CDP_PROXY_PRIMARY_URL and CDP_PROXY_PRIMARY_URL.strip():
         proxies.append(CDP_PROXY_PRIMARY_URL.strip())
     if CDP_PROXY_FALLBACK_URL and CDP_PROXY_FALLBACK_URL.strip():
@@ -4256,10 +4260,11 @@ def _pick_viewport() -> Tuple[int, int]:
     weights = [wt for _, _, wt in _CDP_VIEWPORT_PRESETS]
     return random.choices(sizes, weights=weights, k=1)[0]
 
-# Run before page scripts (Tier 4a CDP). Keep small — real Chrome already looks legitimate over CDP.
+# Run before page scripts (Tier 4a CDP).
+# ONLY patch what headless Chrome genuinely lacks. Over-patching is detectable.
 _CDP_STEALTH_INIT_JS = """
 (() => {
-  // Clean ChromeDriver artifacts (shared Chrome instances may have residual vars)
+  // ── #1 Clean ChromeDriver artifacts ──
   try {
     const keys = Object.keys(window);
     for (let i = 0; i < keys.length; i++) {
@@ -4269,7 +4274,7 @@ _CDP_STEALTH_INIT_JS = """
     }
   } catch (e) {}
 
-  // Patch Permissions API to return realistic values
+  // ── #2 Patch Permissions API to return realistic values ──
   try {
     const originalQuery = window.navigator.permissions.query;
     window.navigator.permissions.query = (parameters) =>
@@ -4278,37 +4283,7 @@ _CDP_STEALTH_INIT_JS = """
         : originalQuery(parameters);
   } catch (e) {}
 
-  // Ensure chrome.runtime exists (missing = headless signal)
-  try {
-    if (!window.chrome) window.chrome = {};
-    if (!window.chrome.runtime) {
-      window.chrome.runtime = {
-        connect: function() {},
-        sendMessage: function() {},
-      };
-    }
-  } catch (e) {}
-
-  // Patch plugins array (headless Chrome has 0 plugins)
-  try {
-    if (navigator.plugins.length === 0) {
-      Object.defineProperty(navigator, 'plugins', {
-        get: () => {
-          const arr = [
-            { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format', length: 1 },
-            { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '', length: 1 },
-            { name: 'Native Client', filename: 'internal-nacl-plugin', description: '', length: 2 },
-          ];
-          arr.item = (i) => arr[i] || null;
-          arr.namedItem = (n) => arr.find(p => p.name === n) || null;
-          arr.refresh = () => {};
-          return arr;
-        },
-      });
-    }
-  } catch (e) {}
-
-  // Patch languages if empty (headless signal)
+  // ── #3 Patch languages if empty (headless signal) ──
   try {
     if (!navigator.languages || navigator.languages.length === 0) {
       Object.defineProperty(navigator, 'languages', {
@@ -4319,48 +4294,24 @@ _CDP_STEALTH_INIT_JS = """
 })();
 """
 
-_CDP_CANVAS_NOISE_JS = """
-(() => {
-  // Add tiny pixel noise to canvas fingerprinting calls to vary the hash per session.
-  // Uses a cloned canvas so the visible page content is never altered.
-  const _seed = Math.random() * 0xFFFF | 0;
-  const _origToDataURL = HTMLCanvasElement.prototype.toDataURL;
-  const _origToBlob = HTMLCanvasElement.prototype.toBlob;
 
-  function _applyNoise(sourceCanvas, seed) {
-    try {
-      if (!sourceCanvas || sourceCanvas.width < 16 || sourceCanvas.height < 16) return null;
-      const clone = document.createElement('canvas');
-      clone.width = sourceCanvas.width;
-      clone.height = sourceCanvas.height;
-      const cloneCtx = clone.getContext('2d');
-      if (!cloneCtx) return null;
-      cloneCtx.drawImage(sourceCanvas, 0, 0);
-      const img = cloneCtx.getImageData(0, 0, clone.width, clone.height);
-      const d = img.data;
-      const changes = 2 + (seed % 3);
-      for (let i = 0; i < changes; i++) {
-        const idx = ((seed + i * 7) % (d.length / 4)) * 4;
-        d[idx] = (d[idx] + (i % 2 === 0 ? 1 : -1) + 256) % 256;
-      }
-      cloneCtx.putImageData(img, 0, 0);
-      return clone;
-    } catch(e) { return null; }
-  }
-
-  HTMLCanvasElement.prototype.toDataURL = function() {
-    const clone = _applyNoise(this, _seed);
-    if (clone) return _origToDataURL.apply(clone, arguments);
-    return _origToDataURL.apply(this, arguments);
-  };
-
-  HTMLCanvasElement.prototype.toBlob = function(callback) {
-    const clone = _applyNoise(this, _seed);
-    if (clone) return _origToBlob.apply(clone, arguments);
-    return _origToBlob.apply(this, arguments);
-  };
-})();
-"""
+def _derive_sec_ch_ua(ua: str) -> dict:
+    """Extract Chrome major version and platform from UA to build matching Sec-CH-UA headers.
+    Mismatched client hints vs UA string is a top detection signal."""
+    import re
+    m = re.search(r"Chrome/(\d+)", ua)
+    major = m.group(1) if m else _CHROME_VERSION
+    if "Macintosh" in ua:
+        platform = '"macOS"'
+    elif "Linux" in ua:
+        platform = '"Linux"'
+    else:
+        platform = '"Windows"'
+    return {
+        "Sec-CH-UA": f'"Chromium";v="{major}", "Not_A Brand";v="24", "Google Chrome";v="{major}"',
+        "Sec-CH-UA-Mobile": "?0",
+        "Sec-CH-UA-Platform": platform,
+    }
 
 
 def _build_cdp_playwright_context_kwargs(proxy_config: Optional[dict], domain: Optional[str] = None) -> dict:
@@ -4380,6 +4331,9 @@ def _build_cdp_playwright_context_kwargs(proxy_config: Optional[dict], domain: O
         ua = _pick_user_agent()
         dsf = random.choices([1, 1.25, 1.5, 2], weights=[60, 10, 10, 20], k=1)[0]
         color_scheme = "light"
+
+    # Build Sec-CH-UA client hints that match the chosen UA string
+    ch_ua = _derive_sec_ch_ua(ua)
 
     kwargs: Dict[str, Any] = dict(
         locale="en-US",
@@ -4404,6 +4358,7 @@ def _build_cdp_playwright_context_kwargs(proxy_config: Optional[dict], domain: O
             "Sec-Fetch-Mode": "navigate",
             "Sec-Fetch-Site": "none",
             "Sec-Fetch-User": "?1",
+            **ch_ua,
         },
     )
     if proxy_config:
@@ -4417,10 +4372,6 @@ def _cdp_attach_stealth_init(context) -> None:
         context.add_init_script(_CDP_STEALTH_INIT_JS)
     except Exception as exc:
         logger.debug("CDP stealth init script attach failed: %s", exc)
-    try:
-        context.add_init_script(_CDP_CANVAS_NOISE_JS)
-    except Exception as exc:
-        logger.debug("CDP canvas noise script attach failed: %s", exc)
 
 
 def _get_cdp_browser():
@@ -4520,20 +4471,32 @@ _POPUP_SUPPRESSION_CSS = """
 
 _POPUP_PREVENTION_JS = r"""
 (() => {
-    window.__originalOpen = window.open;
-    window.open = function() { return null; };
+    // Store originals in a closure — never on window where anti-bot can enumerate them.
+    const _wo = window.open;
+    const _wa = window.alert;
+    const _wc = window.confirm;
+    const _wp = window.prompt;
+    // Return a minimal fake WindowProxy instead of null — always returning null
+    // is a bot signal (real Chrome returns null only when popup blocker fires,
+    // and even then some sites check for window properties on the return value).
+    window.open = function() {
+      return {
+        closed: true,
+        close: function() {},
+        focus: function() {},
+        blur: function() {},
+        postMessage: function() {},
+        location: { href: 'about:blank' },
+      };
+    };
     if (window.Notification) {
         window.Notification.requestPermission = () => Promise.resolve('denied');
     }
-    window.__origAlert = window.alert;
     window.alert = function() {};
-    window.__origConfirm = window.confirm;
     window.confirm = function() { return false; };
-    window.__origPrompt = window.prompt;
     window.prompt = function() { return null; };
 
     const style = document.createElement('style');
-    style.id = '__popup_guard_css';
     style.textContent = `""" + _POPUP_SUPPRESSION_CSS.replace('`', r'\`') + r"""`;
     (document.head || document.documentElement).appendChild(style);
 
@@ -4609,13 +4572,21 @@ _POPUP_PREVENTION_JS = r"""
         }
 
         const containerRect = container.getBoundingClientRect();
+        const dangerousLabels = ['share', 'favorite', 'wishlist', 'heart', 'like',
+            'save', 'bookmark', 'compare', 'zoom', 'expand', 'fullscreen', 'settings',
+            'menu', 'more', 'options', 'info', 'help', 'cart', 'bag', 'quantity'];
         for (const el of allClickable) {
             const r = el.getBoundingClientRect();
             if (r.width < 60 && r.height < 60 && r.width > 8 && r.height > 8) {
                 const relX = r.left - containerRect.left;
                 const relY = r.top - containerRect.top;
                 if (relX > containerRect.width * 0.6 && relY < containerRect.height * 0.25) {
-                    if (el.offsetParent !== null) return el;
+                    if (el.offsetParent === null) continue;
+                    // Skip elements whose aria-label or class suggests a non-close action
+                    const elLabel = ((el.getAttribute('aria-label') || '') + ' ' +
+                        (el.className || '').toString()).toLowerCase();
+                    if (dangerousLabels.some(d => elLabel.includes(d))) continue;
+                    return el;
                 }
             }
         }
@@ -4624,7 +4595,10 @@ _POPUP_PREVENTION_JS = r"""
     }
 
     let lastDismissTime = 0;
+    let totalDismissals = 0;
+    const MAX_AUTO_DISMISSALS = 8;
     function tryAutoDismiss(el) {
+        if (totalDismissals >= MAX_AUTO_DISMISSALS) return;
         const now = Date.now();
         if (now - lastDismissTime < 2000) return;
         if (!isPopupContainer(el)) return;
@@ -4633,6 +4607,7 @@ _POPUP_PREVENTION_JS = r"""
         const closeBtn = findCloseButton(el);
         if (closeBtn) {
             lastDismissTime = now;
+            totalDismissals++;
             setTimeout(() => { try { closeBtn.click(); } catch(e) {} }, 300 + Math.random() * 400);
         }
     }
@@ -4655,7 +4630,7 @@ _POPUP_PREVENTION_JS = r"""
         childList: true, subtree: true, attributes: true,
         attributeFilter: ['style', 'class', 'aria-hidden'],
     });
-    window.__popupGuardObserver = observer;
+    // Keep reference in closure only — never expose on window (anti-bot fingerprint).
 
     let periodicDismissCount = 0;
     const MAX_PERIODIC = 5;
@@ -4682,7 +4657,10 @@ _POPUP_PREVENTION_JS = r"""
             const id = (el.id || '').toLowerCase();
             const text = ((el.innerText || el.textContent || '') + ' ' + (el.getAttribute('aria-label') || ''))
                 .toLowerCase().slice(0, 200);
-            if (['product', 'gallery', 'carousel', 'header', 'nav', 'footer', 'cart']
+            if (['product', 'gallery', 'carousel', 'header', 'nav', 'footer', 'cart',
+                 'price', 'checkout', 'review', 'rating', 'description', 'breadcrumb',
+                 'sidebar', 'menu', 'search', 'filter', 'sort', 'quick-view', 'quickview',
+                 'image-overlay', 'video-overlay', 'loading', 'spinner', 'tooltip']
                 .some(skip => cls.includes(skip) || id.includes(skip))) continue;
             if (COOKIE_INDICATORS.some(skip => cls.includes(skip) || id.includes(skip) || text.includes(skip))) continue;
             const closeBtn = findCloseButton(el);
@@ -4709,7 +4687,7 @@ _POPUP_PREVENTION_JS = r"""
             }
         }
     }, 2000);
-    window.__popupGuardInterval = periodicInterval;
+    // periodicInterval ref stays in closure — not exposed on window.
 })();
 """
 
@@ -4755,7 +4733,7 @@ _DETECT_BLOCKING_OVERLAY_JS = """
     const candidates = document.querySelectorAll('div, section, aside, [role="dialog"]');
     const results = [];
     const consentWords = """ + _CONSENT_WORDS_JS + """;
-    const signupWords = ['newsletter', 'subscribe', 'email', 'offer', 'discount', 'promo', 'save'];
+    const signupWords = ['newsletter', 'subscribe', 'email-signup', 'lead-capture', 'signup'];
     for (const el of candidates) {
         const style = window.getComputedStyle(el);
         const zIndex = parseInt(style.zIndex, 10);
@@ -4767,7 +4745,10 @@ _DETECT_BLOCKING_OVERLAY_JS = """
         if (rect.width < vw * 0.4 || rect.height < vh * 0.4) continue;
         const cls = (el.className || '').toString().toLowerCase();
         const id = (el.id || '').toLowerCase();
-        if (['product', 'gallery', 'carousel', 'slider', 'header', 'nav', 'footer']
+        if (['product', 'gallery', 'carousel', 'slider', 'header', 'nav', 'footer',
+             'price', 'checkout', 'review', 'rating', 'description', 'breadcrumb',
+             'sidebar', 'menu', 'search', 'filter', 'sort', 'cart', 'quick-view', 'quickview',
+             'image-overlay', 'video-overlay', 'loading', 'spinner', 'tooltip']
             .some(skip => cls.includes(skip) || id.includes(skip))) continue;
         const textSnippet = ((el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim()).slice(0, 220);
         const lowerText = textSnippet.toLowerCase();
@@ -4783,13 +4764,13 @@ _DETECT_BLOCKING_OVERLAY_JS = """
         if (!(hasCloseCandidate || hasEmailInput || hasFormFields || hasConsentWords || hasSignupWords || role === 'dialog' || ariaModal === 'true')) {
             continue;
         }
-        let guardId = el.getAttribute('data-popup-guard-id');
+        let guardId = el.getAttribute('data-ruid');
         if (!guardId) {
-            guardId = `popup-guard-${Date.now()}-${results.length + 1}`;
-            el.setAttribute('data-popup-guard-id', guardId);
+            guardId = `r${Date.now().toString(36)}${(results.length + 1).toString(36)}`;
+            el.setAttribute('data-ruid', guardId);
         }
         results.push({
-            selector: `[data-popup-guard-id="${guardId}"]`,
+            selector: `[data-ruid="${guardId}"]`,
             tagName: el.tagName,
             id: el.id,
             className: el.className?.toString?.() || '',
@@ -4876,12 +4857,28 @@ def _get_domain(url: str) -> str:
         host = host[4:]
     return host
 
+def _move_then_click(page, locator, timeout_ms: int = 1200) -> None:
+    """Move mouse to element center before clicking — force=True skips this,
+    creating a click without preceding mousemove which DataDome flags."""
+    try:
+        box = locator.bounding_box(timeout=timeout_ms)
+        if box:
+            page.mouse.move(
+                box["x"] + box["width"] * random.uniform(0.3, 0.7),
+                box["y"] + box["height"] * random.uniform(0.3, 0.7),
+            )
+            time.sleep(random.uniform(0.04, 0.12))
+    except Exception:
+        pass
+    locator.click(timeout=timeout_ms)
+
+
 def _try_click(page, selector: str, timeout_ms: int = 1200) -> bool:
     try:
         loc = page.locator(selector).first
         if loc.is_visible(timeout=timeout_ms):
             try:
-                loc.click(timeout=timeout_ms)
+                _move_then_click(page, loc, timeout_ms)
             except Exception:
                 loc.click(timeout=timeout_ms, force=True)
             time.sleep(random.uniform(0.25, 0.55))
@@ -4902,7 +4899,7 @@ def _try_click_by_text(page, text: str, timeout_ms: int = 1200, force_exact: boo
             loc = page.get_by_role(role, name=text, exact=use_exact)
             if loc.count() > 0 and loc.first.is_visible(timeout=timeout_ms):
                 try:
-                    loc.first.click(timeout=timeout_ms)
+                    _move_then_click(page, loc.first, timeout_ms)
                 except Exception:
                     loc.first.click(timeout=timeout_ms, force=True)
                 time.sleep(random.uniform(0.25, 0.55))
@@ -4928,7 +4925,7 @@ def _try_click_by_text(page, text: str, timeout_ms: int = 1200, force_exact: boo
         loc = page.locator(f"xpath={xpath}")
         if loc.count() > 0 and loc.first.is_visible(timeout=timeout_ms):
             try:
-                loc.first.click(timeout=timeout_ms)
+                _move_then_click(page, loc.first, timeout_ms)
             except Exception:
                 loc.first.click(timeout=timeout_ms, force=True)
             time.sleep(random.uniform(0.25, 0.55))
@@ -5410,7 +5407,10 @@ def _detect_and_remove_blocking_overlays(page) -> int:
                     "[class*='close'], [data-dismiss], [data-action='close'], .btn-close, button:has(svg)"
                 ).first
                 if overlay.get("hasCloseCandidate") and close_btn.is_visible(timeout=500):
-                    close_btn.click(timeout=1000, force=True)
+                    try:
+                        _move_then_click(page, close_btn, 1000)
+                    except Exception:
+                        close_btn.click(timeout=1000, force=True)
                     logger.info("Closed blocking overlay via internal close button: %s", selector)
                     removed += 1
                     time.sleep(random.uniform(0.3, 0.5))
@@ -5990,7 +5990,7 @@ def _dismiss_single_popup(page, domain: str = "", attempted_actions: Optional[Li
                             btn = cont.get_by_role(role, name=text, exact=use_exact)
                             if btn.count() > 0 and btn.first.is_visible(timeout=300):
                                 try:
-                                    btn.first.click(timeout=800)
+                                    _move_then_click(page, btn.first, 800)
                                 except Exception:
                                     btn.first.click(timeout=800, force=True)
                                 time.sleep(random.uniform(0.25, 0.55))
@@ -6817,9 +6817,14 @@ def _scrape_with_camoufox(
         logger.info("camoufox_scrape_start url=%s proxy=%s", url[:80], bool(sticky_proxy))
         start_time = time.time()
 
+        broker_headers = {}
+        if CAMOUFOX_BROKER_API_KEY:
+            broker_headers["x-api-key"] = CAMOUFOX_BROKER_API_KEY
+
         resp = _httpx.post(
             f"{CAMOUFOX_BROKER_URL}/scrape",
             json=broker_payload,
+            headers=broker_headers,
             timeout=120.0,
         )
 
@@ -7683,7 +7688,7 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
         logger.info("tier_fallback tier=chrome_cdp domain=%s user=%s", scraped_hostname, caller_user_id)
         proxy_list = _get_cdp_proxy_list()
         cdp_result = None
-        proxy_attempts = [1, 3, 2, 2, 2]
+        proxy_attempts = [3, 2, 2, 2]
         try:
             cached = _get_cached_cdp_result(scraped_hostname, product.url)
             if cached and cached.get("price"):
@@ -8100,8 +8105,7 @@ def aci_status(user: User = Depends(get_current_user)):
         "container_group": ACI_CONTAINER_GROUP_NAME,
         "provisioning_state": state["provisioning_state"],
         "container_state": state["container_state"],
-        "ip": state["ip"],
-        "cdp_url": CHROME_CDP_URL,
+        "ip_configured": bool(state["ip"]),
         "cdp_healthy": cdp_healthy,
         "idle_seconds": round(idle_seconds) if idle_seconds else None,
         "idle_timeout_seconds": ACI_IDLE_TIMEOUT_SECONDS,
@@ -8122,7 +8126,7 @@ def aci_start(user: User = Depends(get_current_user)):
     started = _start_aci_container()
     if started:
         _touch_aci_idle_timer()
-    return {"started": started, "cdp_url": CHROME_CDP_URL}
+    return {"started": started}
 
 
 @app.post("/aci/stop")

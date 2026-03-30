@@ -32,7 +32,7 @@ import random
 import time
 from urllib.parse import quote, urlparse
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
 from typing import Optional
 
@@ -46,6 +46,9 @@ if _HEADLESS_ENV in ("true", "1", "yes"):
     HEADLESS_MODE = "virtual"  # Xvfb — headful inside virtual display
 else:
     HEADLESS_MODE = False  # Visible browser window
+
+# API key for authenticating requests from the backend
+BROKER_API_KEY = os.getenv("BROKER_API_KEY", "")
 
 
 class ScrapeRequest(BaseModel):
@@ -64,8 +67,10 @@ app = FastAPI()
 
 
 @app.post("/scrape", response_model=ScrapeResponse)
-async def scrape_page(req: ScrapeRequest):
+async def scrape_page(req: ScrapeRequest, x_api_key: str = Header(default="")):
     """Launch Camoufox, navigate to URL, return rendered HTML."""
+    if BROKER_API_KEY and x_api_key != BROKER_API_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorized")
     try:
         result = await asyncio.get_event_loop().run_in_executor(
             None, _sync_scrape, req.url, req.proxy, req.timeout_ms
@@ -99,7 +104,12 @@ def _sync_scrape(url: str, proxy: Optional[str], timeout_ms: int) -> dict:
     # Traffic mix: mostly Windows desktop, some macOS (BrowserForge aligns fingerprints per OS).
     _os = random.choices(["windows", "macos", "linux"], weights=[5, 2, 1], k=1)[0]
 
-    with Camoufox(
+    # When geoip=True, Camoufox derives timezone/language from the proxy IP.
+    # Hardcoding locale="en-US" would conflict with a non-US proxy (e.g. JP proxy
+    # sets timezone=Asia/Tokyo but locale stays en-US — instant bot signal).
+    # Solution: omit locale when geoip is active so Camoufox auto-derives it;
+    # only set locale explicitly when there's no proxy (direct Azure IP).
+    _camoufox_kwargs = dict(
         headless=HEADLESS_MODE,
         proxy=proxy_config,
         humanize=round(random.uniform(1.5, 3.0), 1),
@@ -108,8 +118,12 @@ def _sync_scrape(url: str, proxy: Optional[str], timeout_ms: int) -> dict:
         block_webrtc=True,
         enable_cache=True,
         disable_coop=True,
-        locale="en-US",
-    ) as browser:
+    )
+    if not proxy_config:
+        # No proxy = direct Azure datacenter IP, geoip won't help, set locale explicitly
+        _camoufox_kwargs["locale"] = "en-US"
+
+    with Camoufox(**_camoufox_kwargs) as browser:
         page = browser.new_page()
         try:
             # Dismiss any JS dialogs
@@ -160,14 +174,23 @@ def _sync_scrape(url: str, proxy: Optional[str], timeout_ms: int) -> dict:
                     referer=product_referer,
                 )
             except Exception:
-                # Some SPAs never fire full load reliably — fall back
-                logger.debug("load wait timeout, falling back to domcontentloaded")
-                page.goto(
-                    url,
-                    wait_until="domcontentloaded",
-                    timeout=timeout_ms,
-                    referer=product_referer,
-                )
+                # Some SPAs never fire full load reliably — try networkidle then domcontentloaded
+                try:
+                    logger.debug("load wait timeout, trying networkidle")
+                    page.goto(
+                        url,
+                        wait_until="networkidle",
+                        timeout=timeout_ms,
+                        referer=product_referer,
+                    )
+                except Exception:
+                    logger.debug("networkidle timeout, falling back to domcontentloaded")
+                    page.goto(
+                        url,
+                        wait_until="domcontentloaded",
+                        timeout=timeout_ms,
+                        referer=product_referer,
+                    )
 
             # --- STEP 3: Dismiss cookie banners ASAP ---
             # Real users dismiss overlays within ~1s of them appearing.

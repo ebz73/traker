@@ -4,7 +4,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # System deps for Camoufox (Firefox) + VNC
 RUN apt-get update && apt-get install -y \
-    wget ca-certificates fonts-liberation \
+    wget ca-certificates \
+    fonts-liberation fonts-dejavu-core fonts-noto-core \
+    fonts-freefont-ttf fonts-ubuntu fontconfig \
     python3 python3-pip \
     libgtk-3-0 libdbus-glib-1-2 libxt6 libx11-xcb1 \
     libasound2t64 libxcomposite1 libxdamage1 libxrandr2 \

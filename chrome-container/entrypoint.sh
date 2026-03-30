@@ -29,5 +29,4 @@ exec google-chrome-stable \
     --disable-background-networking \
     --disable-sync \
     --disable-translate \
-    --hide-scrollbars \
     --mute-audio
