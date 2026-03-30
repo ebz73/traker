@@ -177,6 +177,7 @@ function LoginPage({
   setAuthError,
   authLoading,
   authSuccess,
+  loginExiting,
   handleLogin,
   handleRegister,
 }) {
@@ -422,7 +423,7 @@ function LoginPage({
   }
 
   return (
-    <div className="loginPage">
+    <div className={`loginPage${loginExiting ? ' lp-exiting' : ''}`}>
       <section className="lp-leftPanel">
         <div className="lp-brand">
           <div className="lp-logoBox">T</div>
@@ -701,8 +702,12 @@ function LoginPage({
 
             {authError && <div className="lp-error">{authError}</div>}
 
-            <button className="lp-submitBtn" type="submit" disabled={authLoading || !loginEmail || !loginPassword}>
-              {authLoading ? 'Please wait...' : isLogin ? 'Log in' : 'Register'}
+            <button className="lp-submitBtn" type="submit" disabled={authLoading || authSuccess || loginExiting || !loginEmail || !loginPassword}>
+              {authSuccess || loginExiting
+                ? "✓"
+                : authLoading
+                  ? (isLogin ? "Logging in…" : "Creating account…")
+                  : (isLogin ? "Log in" : "Register")}
             </button>
 
             <button className="lp-toggleBtn" type="button" onClick={handleToggleMode} disabled={authLoading || isTransitioning}>

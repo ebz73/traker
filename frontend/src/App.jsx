@@ -1384,6 +1384,7 @@ function App() {
   const [authView, setAuthView] = useState('login')
   const [authLoading, setAuthLoading] = useState(false)
   const [authSuccess, setAuthSuccess] = useState(false)
+  const [loginExiting, setLoginExiting] = useState(false)
   const [authError, setAuthError] = useState('')
   const [loginEmail, setLoginEmail] = useState('')
   const [loginPassword, setLoginPassword] = useState('')
@@ -1742,11 +1743,19 @@ function App() {
         return
       }
       setAuthSuccess(true)
-      const celebrationDuration = typeof window !== 'undefined' && window.innerWidth <= 1024 ? 400 : 2000
+
+      const isMobile = window.innerWidth <= 1024
+      const celebrationDuration = isMobile ? 0 : 1600
+      const exitDuration = isMobile ? 300 : 400
+
       setTimeout(() => {
-        saveAuth(data.access_token, loginEmail)
-        dismissToast()
-        setAuthSuccess(false)
+        setLoginExiting(true)
+        setTimeout(() => {
+          saveAuth(data.access_token, loginEmail)
+          dismissToast()
+          setAuthSuccess(false)
+          setLoginExiting(false)
+        }, exitDuration)
       }, celebrationDuration)
       setLoginPassword('')
       setAuthError('')
@@ -2628,6 +2637,7 @@ function App() {
         setAuthError={setAuthError}
         authLoading={authLoading}
         authSuccess={authSuccess}
+        loginExiting={loginExiting}
         handleLogin={handleLogin}
         handleRegister={handleRegister}
       />

@@ -1,8 +1,16 @@
 .loginPage {
-  min-height: 100vh;
+  min-height: 100vh; /* fallback for older browsers */
+  min-height: 100dvh;
   display: grid;
   grid-template-columns: 1fr 1fr;
   background: var(--bg);
+  transition: opacity 400ms ease, transform 400ms ease;
+}
+
+.loginPage.lp-exiting {
+  opacity: 0;
+  transform: scale(1.02);
+  pointer-events: none;
 }
 
 .lp-leftPanel {
@@ -521,6 +529,7 @@
 @media (max-width: 1024px) {
   .loginPage {
     grid-template-columns: 1fr;
+    transition: opacity 300ms ease, transform 300ms ease;
   }
 
   .lp-leftPanel {
@@ -528,7 +537,10 @@
   }
 
   .lp-rightPanel {
-    padding: 24px;
+    padding-top: calc(24px + env(safe-area-inset-top));
+    padding-bottom: calc(24px + env(safe-area-inset-bottom));
+    padding-left: 24px;
+    padding-right: 24px;
     background: var(--purple-bg);
   }
 
