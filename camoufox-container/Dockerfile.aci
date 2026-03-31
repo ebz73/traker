@@ -2,11 +2,10 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# System deps for Camoufox (Firefox)
+# System deps for Camoufox (Firefox) + Windows-compatible fonts
 RUN apt-get update && apt-get install -y \
-    wget ca-certificates \
-    fonts-liberation fonts-dejavu-core fonts-noto-core \
-    fonts-freefont-ttf fonts-ubuntu fontconfig \
+    wget ca-certificates fonts-liberation \
+    fonts-croscore fonts-crosextra-carlito fonts-crosextra-caladea \
     python3 python3-pip \
     libgtk-3-0 libdbus-glib-1-2 libxt6 libx11-xcb1 \
     libasound2t64 libxcomposite1 libxdamage1 libxrandr2 \
@@ -14,11 +13,12 @@ RUN apt-get update && apt-get install -y \
     libgbm1 libnspr4 libnss3 libpango-1.0-0 \
     libxss1 libxtst6 \
     xvfb \
+    && fc-cache -f -v \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install Camoufox with GeoIP support + broker deps
 RUN pip3 install --break-system-packages --ignore-installed \
-    "camoufox[geoip]" \
+    "camoufox[geoip]>=0.4,<0.5" \
     fastapi \
     "uvicorn[standard]"
 
@@ -29,4 +29,5 @@ COPY broker.py /opt/broker.py
 
 EXPOSE 3001
 
-CMD ["python3", "-m", "uvicorn", "broker:app", "--host", "0.0.0.0", "--port", "3001", "--log-level", "info", "--app-dir", "/opt"]
+# Pre-start Xvfb at 1920x1200 so BrowserForge screen sizes always fit
+CMD ["sh", "-c", "Xvfb :99 -screen 0 1920x1200x24 -nolisten tcp -ac & sleep 1 && export DISPLAY=:99 && python3 -m uvicorn broker:app --host 0.0.0.0 --port 3001 --log-level info --app-dir /opt"]

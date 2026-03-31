@@ -210,7 +210,7 @@ ENABLE_ACI_AUTO_START = os.getenv("ENABLE_ACI_AUTO_START", "true").lower() in ("
 
 # --- Azure Container Instance (on-demand Camoufox / Firefox) ---
 CAMOUFOX_ACI_IMAGE = os.getenv("CAMOUFOX_ACI_IMAGE", "ghcr.io/ebz73/traker-camoufox:latest")
-CAMOUFOX_ACI_CONTAINER_NAME = os.getenv("CAMOUFOX_ACI_CONTAINER_NAME", "fx-worker-1")
+CAMOUFOX_ACI_CONTAINER_NAME = os.getenv("CAMOUFOX_ACI_CONTAINER_NAME", "traker-camoufox")
 CAMOUFOX_ACI_CPU = float(os.getenv("CAMOUFOX_ACI_CPU", "1"))
 CAMOUFOX_ACI_MEMORY_GB = float(os.getenv("CAMOUFOX_ACI_MEMORY_GB", "2"))
 CAMOUFOX_BROKER_URL = os.getenv("CAMOUFOX_BROKER_URL", "")

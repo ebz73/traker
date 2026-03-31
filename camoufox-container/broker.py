@@ -22,13 +22,16 @@ Broker-level stealth (we handle):
 - disable_coop for Cloudflare Turnstile iframe interaction
 
 Environment:
-  CAMOUFOX_HEADLESS=true  → headless="virtual" (Xvfb, recommended for production)
-  CAMOUFOX_HEADLESS=false → headless=False (visible browser, local dev with VNC)
+  DISPLAY=:99 (set by Dockerfile) → headless=False on pre-started Xvfb (production)
+  DISPLAY=:98 (set by docker-compose) → headless=False on VNC display (local dev)
+  CAMOUFOX_HEADLESS=true (no DISPLAY) → headless="virtual" (fallback, Camoufox starts own Xvfb)
+  CAMOUFOX_HEADLESS=false (no DISPLAY) → headless=False (needs a display to work)
 """
 import asyncio
 import logging
 import os
 import random
+import re
 import time
 from urllib.parse import quote, urlparse
 
@@ -39,13 +42,20 @@ from typing import Optional
 logger = logging.getLogger("camoufox-broker")
 logging.basicConfig(level=logging.INFO)
 
-# When HEADLESS=true (production), use "virtual" display for maximum stealth.
-# When HEADLESS=false (local dev), use False for visible browser in VNC.
+
+def _sanitize_error(msg: str) -> str:
+    """Remove proxy credentials from error messages."""
+    return re.sub(r'://[^@]+@', '://***:***@', str(msg))
+
 _HEADLESS_ENV = os.getenv("CAMOUFOX_HEADLESS", "true").lower()
-if _HEADLESS_ENV in ("true", "1", "yes"):
-    HEADLESS_MODE = "virtual"  # Xvfb — headful inside virtual display
+if os.getenv("DISPLAY"):
+    # Xvfb is pre-started (ACI production) — run headful on existing display
+    HEADLESS_MODE = False
+elif _HEADLESS_ENV in ("true", "1", "yes"):
+    # No display available — let Camoufox start its own Xvfb
+    HEADLESS_MODE = "virtual"
 else:
-    HEADLESS_MODE = False  # Visible browser window
+    HEADLESS_MODE = False  # Visible browser window (local dev with VNC)
 
 # API key for authenticating requests from the backend
 BROKER_API_KEY = os.getenv("BROKER_API_KEY", "")
@@ -63,7 +73,7 @@ class ScrapeResponse(BaseModel):
     status: int
 
 
-app = FastAPI()
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
 
 @app.post("/scrape", response_model=ScrapeResponse)
@@ -77,8 +87,8 @@ async def scrape_page(req: ScrapeRequest, x_api_key: str = Header(default="")):
         )
         return result
     except Exception as exc:
-        logger.error("Camoufox scrape failed for %s: %s", req.url[:80], exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.error("Camoufox scrape failed for %s: %s", req.url[:80], _sanitize_error(str(exc)))
+        raise HTTPException(status_code=500, detail=_sanitize_error(str(exc)))
 
 
 def _sync_scrape(url: str, proxy: Optional[str], timeout_ms: int) -> dict:
@@ -126,8 +136,15 @@ def _sync_scrape(url: str, proxy: Optional[str], timeout_ms: int) -> dict:
     with Camoufox(**_camoufox_kwargs) as browser:
         page = browser.new_page()
         try:
-            # Dismiss any JS dialogs
-            page.on("dialog", lambda dialog: dialog.dismiss())
+            # Dismiss any JS dialogs with human-like delay
+            def _handle_dialog(dialog):
+                time.sleep(random.uniform(0.3, 1.2))
+                try:
+                    dialog.dismiss()
+                except Exception:
+                    pass
+
+            page.on("dialog", _handle_dialog)
             time.sleep(random.uniform(0.12, 0.42))
 
             # --- STEP 1: Homepage warmup ---
@@ -229,8 +246,8 @@ def _sync_scrape(url: str, proxy: Optional[str], timeout_ms: int) -> dict:
 
                 # Phase 1: Quick scroll down to find price area
                 scroll_1 = random.randint(350, 700)
-                page.mouse.wheel(0, scroll_1)
-                time.sleep(random.uniform(0.4, 0.9))
+                _human_scroll(page, scroll_1, direction=1)
+                time.sleep(random.uniform(0.2, 0.5))
 
                 # Phase 2: Read pause
                 time.sleep(random.uniform(0.5, 1.5))
@@ -243,18 +260,19 @@ def _sync_scrape(url: str, proxy: Optional[str], timeout_ms: int) -> dict:
                             random.randint(int(vp_h * 0.2), int(vp_h * 0.8)),
                         )
                         time.sleep(random.uniform(0.05, 0.15))
-                        page.mouse.wheel(0, random.randint(80, 250))
-                        time.sleep(random.uniform(0.4, 1.2))
+                        _human_scroll(page, random.randint(80, 250), direction=1)
+                        time.sleep(random.uniform(0.3, 0.8))
 
                 # Phase 4: Scroll back up toward price (65% chance)
                 if random.random() < 0.65:
-                    page.mouse.wheel(0, -random.randint(120, max(150, scroll_1 // 2)))
-                    time.sleep(random.uniform(0.3, 0.7))
+                    _human_scroll(page, random.randint(120, max(150, scroll_1 // 2)), direction=-1)
+                    time.sleep(random.uniform(0.2, 0.5))
 
                 # Phase 5: Small jitter (20% chance — reading adjustment)
                 if random.random() < 0.2:
-                    page.mouse.wheel(0, random.randint(-40, 40))
-                    time.sleep(random.uniform(0.15, 0.35))
+                    jitter = random.randint(20, 40)
+                    _human_scroll(page, jitter, direction=random.choice([1, -1]))
+                    time.sleep(random.uniform(0.1, 0.25))
             except Exception:
                 pass
 
@@ -338,6 +356,25 @@ def _dismiss_cookie_banner(page) -> None:
                 return
         except Exception:
             pass
+
+
+def _human_scroll(page, total_pixels: int, direction: int = 1) -> None:
+    """Scroll in small increments like a real mouse wheel.
+    direction: 1 = down, -1 = up
+    """
+    remaining = abs(total_pixels)
+    while remaining > 0:
+        # Each wheel tick is 30-80px (real mouse wheel delta)
+        tick = min(remaining, random.randint(30, 80))
+        try:
+            page.mouse.wheel(0, tick * direction)
+        except Exception:
+            break
+        remaining -= tick
+        # Tiny gap between ticks (10-50ms) — real scroll wheel timing
+        time.sleep(random.uniform(0.01, 0.05))
+    # Brief settling pause after scroll completes
+    time.sleep(random.uniform(0.05, 0.15))
 
 
 @app.get("/health")
