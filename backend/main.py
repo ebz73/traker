@@ -244,6 +244,9 @@ CDP_PROXY_ENABLED = (
 # Optional: override Playwright user agent for CDP (must match remote Chrome major version or omit).
 CDP_USER_AGENT = os.getenv("CDP_USER_AGENT", "").strip()
 
+_CHROME_VERSION = "146"
+_CHROME_FULL_VERSION = "146.0.7680.153"
+
 # Tier 4a: rotate UA strings — a single static UA from all IPs is a bot cluster signal.
 # Keep aligned with _CHROME_VERSION / _CHROME_FULL_VERSION used by HTTP-first tier.
 _CHROME_UA_POOL = [
@@ -815,8 +818,6 @@ _HTTP_FIRST_BASE_HEADERS = {
     "Cache-Control": "max-age=0",
 }
 
-_CHROME_VERSION = "146"
-_CHROME_FULL_VERSION = "146.0.7680.153"
 _USER_AGENT_PROFILES = [
     {
         "User-Agent": f"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{_CHROME_FULL_VERSION} Safari/537.36",
