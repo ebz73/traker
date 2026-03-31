@@ -4147,7 +4147,7 @@ def _proxy_playwright_config_to_url(cfg: dict) -> str:
 
 def _make_sticky_proxy_url_for_broker(proxy_url: Optional[str]) -> Optional[str]:
     """
-    Same sticky-session rules as _make_sticky_proxy_config, but as a URL for Tier 4b broker.
+    Same sticky-session rules as _make_sticky_proxy_config, but as a URL for Tier 4a broker.
     """
     raw = (proxy_url or "").strip()
     if not raw:
@@ -4160,36 +4160,41 @@ def _make_sticky_proxy_url_for_broker(proxy_url: Optional[str]) -> Optional[str]
 
 def _get_cdp_proxy_list() -> List[str]:
     """
-    Proxy list for Chrome CDP (Tier 4a).
-    Order: residential cheap -> residential fallback -> ISP #1 -> ISP #3 (shared).
+    Proxy list for Chrome CDP (Tier 4b — fallback).
+    Order: ISP #1 -> ISP #3 -> ISP #2 -> DataImpulse -> IPRoyal.
+    ISP proxies first (cleanest IPs), residential as fallback.
     """
     proxies: List[str] = []
-    if CDP_PROXY_PRIMARY_URL and CDP_PROXY_PRIMARY_URL.strip():
-        proxies.append(CDP_PROXY_PRIMARY_URL.strip())
-    if CDP_PROXY_FALLBACK_URL and CDP_PROXY_FALLBACK_URL.strip():
-        proxies.append(CDP_PROXY_FALLBACK_URL.strip())
     if CDP_PROXY_ISP_URL and CDP_PROXY_ISP_URL.strip():
         proxies.append(CDP_PROXY_ISP_URL.strip())
     if CDP_PROXY_ISP_URL_3 and CDP_PROXY_ISP_URL_3.strip():
         proxies.append(CDP_PROXY_ISP_URL_3.strip())
+    if CDP_PROXY_ISP_URL_2 and CDP_PROXY_ISP_URL_2.strip():
+        proxies.append(CDP_PROXY_ISP_URL_2.strip())
+    if CDP_PROXY_PRIMARY_URL and CDP_PROXY_PRIMARY_URL.strip():
+        proxies.append(CDP_PROXY_PRIMARY_URL.strip())
+    if CDP_PROXY_FALLBACK_URL and CDP_PROXY_FALLBACK_URL.strip():
+        proxies.append(CDP_PROXY_FALLBACK_URL.strip())
     return proxies
 
 
 def _get_camoufox_proxy_list() -> List[str]:
     """
-    Proxy list for Camoufox (Tier 4b).
-    Order: residential cheap -> residential fallback -> ISP #2 -> ISP #3 (shared).
-    ISP #2 is dedicated to Camoufox (different IP than Chrome's ISP #1).
+    Proxy list for Camoufox (Tier 4a — tried first).
+    Order: ISP #2 -> ISP #3 -> ISP #1 -> DataImpulse -> IPRoyal.
+    ISP proxies first (cleanest IPs), residential as fallback.
     """
     proxies: List[str] = []
-    if CDP_PROXY_PRIMARY_URL and CDP_PROXY_PRIMARY_URL.strip():
-        proxies.append(CDP_PROXY_PRIMARY_URL.strip())
-    if CDP_PROXY_FALLBACK_URL and CDP_PROXY_FALLBACK_URL.strip():
-        proxies.append(CDP_PROXY_FALLBACK_URL.strip())
     if CDP_PROXY_ISP_URL_2 and CDP_PROXY_ISP_URL_2.strip():
         proxies.append(CDP_PROXY_ISP_URL_2.strip())
     if CDP_PROXY_ISP_URL_3 and CDP_PROXY_ISP_URL_3.strip():
         proxies.append(CDP_PROXY_ISP_URL_3.strip())
+    if CDP_PROXY_ISP_URL and CDP_PROXY_ISP_URL.strip():
+        proxies.append(CDP_PROXY_ISP_URL.strip())
+    if CDP_PROXY_PRIMARY_URL and CDP_PROXY_PRIMARY_URL.strip():
+        proxies.append(CDP_PROXY_PRIMARY_URL.strip())
+    if CDP_PROXY_FALLBACK_URL and CDP_PROXY_FALLBACK_URL.strip():
+        proxies.append(CDP_PROXY_FALLBACK_URL.strip())
     return proxies
 
 
@@ -4242,7 +4247,7 @@ def _timezone_for_proxy(proxy_config: Optional[dict]) -> str:
     return "America/Chicago"
 
 
-# Tier 4a: vary desktop geometry — weighted by real-world StatCounter distribution.
+# Tier 4b: vary desktop geometry — weighted by real-world StatCounter distribution.
 _CDP_VIEWPORT_PRESETS: List[Tuple[int, int, int]] = [
     # (width, height, weight)
     (1920, 1080, 23),
@@ -4261,7 +4266,7 @@ def _pick_viewport() -> Tuple[int, int]:
     weights = [wt for _, _, wt in _CDP_VIEWPORT_PRESETS]
     return random.choices(sizes, weights=weights, k=1)[0]
 
-# Run before page scripts (Tier 4a CDP).
+# Run before page scripts (Tier 4b CDP).
 # ONLY patch what headless Chrome genuinely lacks. Over-patching is detectable.
 _CDP_STEALTH_INIT_JS = """
 (() => {
@@ -4316,7 +4321,7 @@ def _derive_sec_ch_ua(ua: str) -> dict:
 
 
 def _build_cdp_playwright_context_kwargs(proxy_config: Optional[dict], domain: Optional[str] = None) -> dict:
-    """Playwright context options aligned with timezone/proxy (Tier 4a).
+    """Playwright context options aligned with timezone/proxy (Tier 4b).
     If domain is provided, uses a per-domain stable fingerprint."""
     if domain:
         fp = _get_or_create_domain_fingerprint(domain)
@@ -7617,12 +7622,12 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
     else:
         logger.info("tier_skip tier=extension reason=unavailable domain=%s user=%s", scraped_hostname, caller_user_id)
 
-    # Tier 4: Remote Chrome container via CDP (with on-demand ACI start)
+    # Tier 4: Browser-engine fallbacks via Camoufox then Chrome CDP
     cooldown_info = _get_domain_cooldown_info(scraped_hostname)
     if cooldown_info:
         remaining, reason = cooldown_info
         logger.info(
-            "tier_skip tier=chrome_cdp reason=%s domain=%s user=%s remaining=%d",
+            "tier_skip tier=browser_engines reason=%s domain=%s user=%s remaining=%d",
             reason,
             scraped_hostname,
             caller_user_id,
@@ -7634,7 +7639,7 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                 "error": (
                     f"CAPTCHA protection detected on {scraped_hostname}. "
                     f"Use the browser extension to check this price. "
-                    f"CDP will retry automatically in {int(remaining // 60)} minutes."
+                    f"Browser engines will retry automatically in {int(remaining // 60)} minutes."
                 ),
                 "domain": scraped_hostname,
                 "cooldown_remaining": remaining,
@@ -7647,7 +7652,7 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                 "error": (
                     f"Access blocking was recently detected on {scraped_hostname}. "
                     f"Use the browser extension to check this price. "
-                    f"CDP will retry automatically in {int(remaining // 60)} minutes."
+                    f"Browser engines will retry automatically in {int(remaining // 60)} minutes."
                 ),
                 "domain": scraped_hostname,
                 "cooldown_remaining": remaining,
@@ -7657,7 +7662,7 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
         return {
             "status": "cooldown_blocked",
             "error": (
-                f"Chrome CDP is temporarily cooling down for {scraped_hostname} "
+                f"Browser engines are temporarily cooling down for {scraped_hostname} "
                 f"after a recent {reason.replace('_', ' ')} event. "
                 f"Try again in {int(max(1, remaining // 60))} minutes."
             ),
@@ -7667,6 +7672,131 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
             "source": "chrome_cdp",
         }
 
+    proxy_attempts = [1, 1, 1, 2, 2]
+    fox_was_captcha_blocked = False
+
+    # Tier 4a: Camoufox (Firefox) — separate container, different browser engine
+    if not CAMOUFOX_BROKER_URL or not _camoufox_broker_healthy():
+        if CAMOUFOX_ACI_IMAGE and ENABLE_ACI_AUTO_START:
+            logger.info("Starting Camoufox ACI container for domain=%s", scraped_hostname)
+            _ensure_camoufox_aci_running()
+
+    if CAMOUFOX_BROKER_URL and _camoufox_broker_healthy():
+        _touch_camoufox_idle_timer()
+        logger.info("tier_fallback tier=camoufox domain=%s user=%s", scraped_hostname, caller_user_id)
+        proxy_list = _get_camoufox_proxy_list()
+        fox_attempted_any_proxy = False
+        for proxy_idx, proxy_url_str in enumerate(proxy_list):
+            fox_proxy_label = _get_proxy_label(proxy_url_str)
+            if fox_proxy_label == "unknown_proxy":
+                fox_proxy_label = f"proxy_{proxy_idx}"
+            attempts_for_this_proxy = proxy_attempts[proxy_idx] if proxy_idx < len(proxy_attempts) else 1
+            logger.info(
+                "Camoufox attempt with %s (%d max attempts) for domain=%s",
+                fox_proxy_label,
+                attempts_for_this_proxy,
+                scraped_hostname,
+            )
+            for attempt_idx in range(attempts_for_this_proxy):
+                fox_attempted_any_proxy = True
+                logger.info(
+                    "camoufox_proxy_attempt proxy=%s attempt=%d/%d domain=%s",
+                    fox_proxy_label,
+                    attempt_idx + 1,
+                    attempts_for_this_proxy,
+                    scraped_hostname,
+                )
+                fox_result = _scrape_with_camoufox(
+                    product.url,
+                    proxy_url=proxy_url_str,
+                    custom_selector=effective_selector,
+                    original_price_selector=effective_original_selector,
+                )
+                if fox_result and fox_result.get("price") is not None:
+                    fox_price = fox_result["price"]
+                    fox_original = fox_result.get("original_price")
+                    fox_name = fox_result.get("name", "Unknown Product")
+                    fox_currency = normalize_currency_code(
+                        fox_result.get("currency_code") or _guess_currency_code_from_url(product.url)
+                    )
+                    fox_site_name = fox_result.get("site_name")
+                    _save_price_history(
+                        product_name=fox_name,
+                        url=product.url,
+                        price=fox_price,
+                        original_price=fox_original,
+                        currency_code=fox_currency,
+                        custom_selector=effective_selector,
+                        original_price_selector=effective_original_selector,
+                        ui_changed=False,
+                        user_id=caller_user_id,
+                    )
+                    _update_tracked_product_price(
+                        product.url,
+                        fox_price,
+                        fox_original,
+                        fox_name,
+                        currency_code=fox_currency,
+                        user_id=caller_user_id,
+                        site_name=fox_site_name,
+                    )
+                    _track_selector_drift(
+                        product.url,
+                        caller_user_id,
+                        selector_worked=fox_result.get("selector_worked", False),
+                        has_selector=bool(effective_selector),
+                        tier="camoufox",
+                    )
+                    logger.info(
+                        "scrape_success tier=camoufox domain=%s user=%s price=%.2f elapsed=%.1fs",
+                        scraped_hostname,
+                        caller_user_id,
+                        fox_price,
+                        time.time() - scrape_start_time,
+                    )
+                    _log_scrape_attempt(scraped_hostname, "camoufox", True, user_id=caller_user_id)
+                    return _build_scrape_response(
+                        fox_name,
+                        fox_price,
+                        fox_currency,
+                        effective_selector,
+                        "camoufox",
+                        original_price=fox_original,
+                        original_price_selector=effective_original_selector,
+                        site_name=fox_site_name,
+                    )
+                if attempt_idx + 1 < attempts_for_this_proxy:
+                    logger.info(
+                        "Camoufox %s returned no price for domain=%s, retrying same proxy",
+                        fox_proxy_label,
+                        scraped_hostname,
+                    )
+                else:
+                    logger.info(
+                        "Camoufox %s returned no price for domain=%s, trying next proxy",
+                        fox_proxy_label,
+                        scraped_hostname,
+                    )
+
+        if fox_attempted_any_proxy:
+            # Camoufox only exposes success/None to the orchestrator, so exhausted
+            # proxy attempts are treated as possible blocking before switching engines.
+            fox_was_captcha_blocked = True
+        _log_scrape_attempt(
+            scraped_hostname,
+            "camoufox",
+            False,
+            fail_reason="all_proxies_failed",
+            user_id=caller_user_id,
+        )
+
+    # Add delay between engine switches
+    if fox_was_captcha_blocked:
+        _cdp_delay = random.uniform(5.0, 15.0)
+        logger.info("Adding %.1fs delay before Chrome CDP attempt for domain=%s", _cdp_delay, scraped_hostname)
+        time.sleep(_cdp_delay)
+
+    # Tier 4b: Chrome CDP — remote Chrome container fallback
     cdp_healthy = _cdp_endpoint_healthy()
 
     if not cdp_healthy and ENABLE_ACI_AUTO_START and _AZURE_SDK_AVAILABLE and ACI_SUBSCRIPTION_ID:
@@ -7682,14 +7812,13 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
         else:
             logger.warning("ACI container failed to start for domain=%s user=%s", scraped_hostname, caller_user_id)
 
-    cdp_was_captcha_blocked = False
     cached_cdp_endpoint = _get_cached_cdp_endpoint() if cdp_healthy else None
+    cdp_was_captcha_blocked = False
     if cdp_healthy:
         _touch_aci_idle_timer()
         logger.info("tier_fallback tier=chrome_cdp domain=%s user=%s", scraped_hostname, caller_user_id)
         proxy_list = _get_cdp_proxy_list()
         cdp_result = None
-        proxy_attempts = [3, 2, 2, 2]
         try:
             cached = _get_cached_cdp_result(scraped_hostname, product.url)
             if cached and cached.get("price"):
@@ -7764,7 +7893,7 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                     cooldown_seconds = _COOLDOWN_DURATIONS[cooldown_reason]
                     _mark_domain_cooldown(scraped_hostname, cooldown_reason)
                     logger.info(
-                        "scrape_captcha_blocked tier=chrome_cdp domain=%s reason=%s cooldown=%.0fs — will try Camoufox",
+                        "scrape_captcha_blocked tier=chrome_cdp domain=%s reason=%s cooldown=%.0fs",
                         scraped_hostname,
                         cooldown_reason,
                         cooldown_seconds,
@@ -7777,7 +7906,6 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
                         user_id=caller_user_id,
                     )
                     cdp_was_captcha_blocked = True
-                    # Don't return — fall through to Tier 4b Camoufox
                 elif cdp_result.get("price") is not None:
                     if not cdp_result.get("selector_worked") and effective_selector:
                         logger.warning(
@@ -7841,102 +7969,15 @@ def scrape_price(product: ProductRequest, caller: User = Depends(get_current_use
         logger.warning("tier_skip tier=chrome_cdp reason=unhealthy domain=%s user=%s", scraped_hostname, caller_user_id)
         _log_scrape_attempt(scraped_hostname, "chrome_cdp", False, fail_reason="unhealthy", user_id=caller_user_id)
 
-    # Add delay between engine switches — same domain hit from Chrome then Firefox in quick
-    # succession is suspicious to sites that correlate visits by IP range.
-    if cdp_was_captcha_blocked:
-        _cfox_delay = random.uniform(5.0, 15.0)
-        logger.info("Adding %.1fs delay before Camoufox attempt for domain=%s", _cfox_delay, scraped_hostname)
-        time.sleep(_cfox_delay)
-
-    # Tier 4b: Camoufox (Firefox) — separate container, different browser engine
-    if not CAMOUFOX_BROKER_URL or not _camoufox_broker_healthy():
-        if CAMOUFOX_ACI_IMAGE and ENABLE_ACI_AUTO_START:
-            logger.info("Starting Camoufox ACI container for domain=%s", scraped_hostname)
-            _ensure_camoufox_aci_running()
-
-    if CAMOUFOX_BROKER_URL and _camoufox_broker_healthy():
-        _touch_camoufox_idle_timer()
-        logger.info("tier_fallback tier=camoufox domain=%s user=%s", scraped_hostname, caller_user_id)
-        proxy_list = _get_camoufox_proxy_list()
-        for proxy_url_str in proxy_list:
-            fox_proxy_label = _get_proxy_label(proxy_url_str)
-            logger.info("camoufox_proxy_attempt proxy=%s domain=%s", fox_proxy_label, scraped_hostname)
-            fox_result = _scrape_with_camoufox(
-                product.url,
-                proxy_url=proxy_url_str,
-                custom_selector=effective_selector,
-                original_price_selector=effective_original_selector,
-            )
-            if fox_result and fox_result.get("price") is not None:
-                fox_price = fox_result["price"]
-                fox_original = fox_result.get("original_price")
-                fox_name = fox_result.get("name", "Unknown Product")
-                fox_currency = normalize_currency_code(
-                    fox_result.get("currency_code") or _guess_currency_code_from_url(product.url)
-                )
-                fox_site_name = fox_result.get("site_name")
-                _save_price_history(
-                    product_name=fox_name,
-                    url=product.url,
-                    price=fox_price,
-                    original_price=fox_original,
-                    currency_code=fox_currency,
-                    custom_selector=effective_selector,
-                    original_price_selector=effective_original_selector,
-                    ui_changed=False,
-                    user_id=caller_user_id,
-                )
-                _update_tracked_product_price(
-                    product.url,
-                    fox_price,
-                    fox_original,
-                    fox_name,
-                    currency_code=fox_currency,
-                    user_id=caller_user_id,
-                    site_name=fox_site_name,
-                )
-                _track_selector_drift(
-                    product.url,
-                    caller_user_id,
-                    selector_worked=fox_result.get("selector_worked", False),
-                    has_selector=bool(effective_selector),
-                    tier="camoufox",
-                )
-                logger.info(
-                    "scrape_success tier=camoufox domain=%s user=%s price=%.2f elapsed=%.1fs",
-                    scraped_hostname,
-                    caller_user_id,
-                    fox_price,
-                    time.time() - scrape_start_time,
-                )
-                _log_scrape_attempt(scraped_hostname, "camoufox", True, user_id=caller_user_id)
-                return _build_scrape_response(
-                    fox_name,
-                    fox_price,
-                    fox_currency,
-                    effective_selector,
-                    "camoufox",
-                    original_price=fox_original,
-                    original_price_selector=effective_original_selector,
-                    site_name=fox_site_name,
-                )
-        _log_scrape_attempt(
-            scraped_hostname,
-            "camoufox",
-            False,
-            fail_reason="all_proxies_failed",
-            user_id=caller_user_id,
-        )
-
-    # If Chrome was captcha blocked and Camoufox also failed, return the captcha error
+    # If Chrome CDP was captcha blocked after Camoufox fallback, return the browser-engine cooldown error
     if cdp_was_captcha_blocked:
         return {
             "status": "captcha_blocked",
             "error": (
                 f"CAPTCHA protection detected on {scraped_hostname}. "
-                f"All browser engines exhausted (Chrome + Firefox). "
+                f"All browser engines exhausted (Firefox + Chrome). "
                 f"Use the browser extension to check this price. "
-                f"CDP will retry automatically in {int(_COOLDOWN_DURATIONS.get(CooldownReason.CAPTCHA, 1800) // 60)} minutes."
+                f"Browser engines will retry automatically in {int(_COOLDOWN_DURATIONS.get(CooldownReason.CAPTCHA, 1800) // 60)} minutes."
             ),
             "domain": scraped_hostname,
             "cooldown_remaining": _COOLDOWN_DURATIONS.get(CooldownReason.CAPTCHA, 1800),
