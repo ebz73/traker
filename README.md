@@ -5,35 +5,37 @@ A full-stack price monitoring system for e-commerce products. Track prices acros
 ## Architecture
 
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│                            Azure Cloud                                 │
-│                                                                        │
-│  ┌─────────────────────┐            ┌────────────────────────────┐    │
-│  │  Azure Web App      │    CDP     │  Azure Container Instance  │    │
-│  │  FastAPI Backend     │──────────►│  Chrome + Xvfb             │    │
-│  │  (Python 3.13)      │            │  (headful mode)            │    │
-│  │                      │            └────────────────────────────┘    │
-│  │                      │            ┌────────────────────────────┐    │
-│  │                      │    HTTP    │  Azure Container Instance  │    │
-│  │                      │──────────►│  Camoufox +                │    │
-│  └──────────┬───────────┘            │  Playwright Broker         │    │
-│             │                        └────────────────────────────┘    │
-│             │ SQL                                                      │
-│             │                                                          │
-│  ┌──────────▼───────────┐                                              │
-│  │  Neon Serverless     │                                              │
-│  │  Postgres            │                                              │
-│  └──────────────────────┘                                              │
-│                                                                        │
-│  ┌──────────────────────┐                                              │
-│  │  Azure Web App       │                                              │
-│  │  React Frontend      │                                              │
-│  │  (Node.js 22)        │                                              │
-│  └──────────────────────┘                                              │
-└────────────────────────────────────────────────────────────────────────┘
-           ▲
-           │ HTTPS
-  Chrome Extension / Web Dashboard
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                                 Azure Cloud                                     │
+│                                                                                 │
+│   ┌──────────────────────┐              ┌─────────────────────────────────┐     │
+│   │  Azure Web App       │     CDP      │  Azure Container Instance       │     │
+│   │  FastAPI Backend     │─────────────►│  Chrome + Xvfb                  │     │
+│   │  (Python 3.13)       │              │  (headful mode)                 │     │
+│   │                      │              └─────────────────────────────────┘     │
+│   │                      │                                                      │
+│   │                      │              ┌─────────────────────────────────┐     │
+│   │                      │     HTTP     │  Azure Container Instance       │     │
+│   │                      │─────────────►│  Camoufox +                     │     │
+│   └───────────┬──────────┘              │  Playwright Broker              │     │
+│               │                         └─────────────────────────────────┘     │
+│               │ SQL                                                             │
+│               │                                                                 │
+│   ┌───────────▼──────────┐                                                      │
+│   │  Neon Serverless     │                                                      │
+│   │  Postgres            │                                                      │
+│   └──────────────────────┘                                                      │
+│                                                                                 │
+│   ┌──────────────────────┐                                                      │
+│   │  Azure Web App       │                                                      │
+│   │  React Frontend      │                                                      │
+│   │  (Node.js 22)        │                                                      │
+│   └──────────────────────┘                                                      │
+│                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
+             ▲
+             │ HTTPS
+    Chrome Extension / Web Dashboard
 ```
 
 ## Features
