@@ -30,3 +30,5 @@ docker-compose.yml
 build.sh
 .env.example
 skills-lock.json
+.agents/
+.claude/

@@ -1,6 +1,6 @@
 # PriceTracker
 
-A full-stack price monitoring system for e-commerce products. Track prices across 50+ sites with a multi-tier scraping engine, React dashboard, Chrome extension, and automated email alerts.
+A full-stack price monitoring system for e-commerce products. Track prices across websites with a multi-tier scraping engine, React dashboard, Chrome extension, and automated email alerts.
 
 ## Architecture
 
