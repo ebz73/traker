@@ -1,5 +1,74 @@
+@import "tailwindcss";
+
+@plugin "tailwindcss-animate";
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+@theme {
+  /* Backgrounds */
+  --color-bg: #dbe3f1;
+  --color-bg-card: #ffffff;
+  --color-bg-input: #ffffff;
+  --color-bg-minibox: #f8fbff;
+  --color-bg-chart: #fbfcff;
+  --color-bg-hover: #f4f4f8;
+  --color-bg-highlight: #f8f7ff;
+  --color-bg-skeleton: #e8eef9;
+  --color-bg-below-threshold: #f0faf0;
+  --color-bg-below-threshold-border: #b8e6b8;
+
+  /* Text */
+  --color-ink: #22314a;
+  --color-ink-secondary: #495d7a;
+  --color-muted: #5e708d;
+  --color-muted-light: #667897;
+  --color-muted-lighter: #888888;
+  --color-muted-lightest: #aaaaaa;
+
+  /* Borders */
+  --color-line: #cad6e8;
+  --color-line-light: #dce5f3;
+  --color-line-lighter: #e3eaf6;
+  --color-line-lightest: #e8eef9;
+
+  /* Brand */
+  --color-blue: #2461f0;
+  --color-blue-soft: #dce5ff;
+  --color-blue-chart: #2a61e2;
+  --color-purple: #6c3ff5;
+  --color-purple-soft: #f3f0ff;
+  --color-purple-bg: #f3f0ff;
+
+  /* Semantic */
+  --color-success: #2e7d32;
+  --color-success-bg: #e8f5e9;
+  --color-red: #dc2626;
+
+  /* Character art colors (matches CHARACTER_COLORS in constants.js) */
+  --color-art-purple: #6c3ff5;
+  --color-art-black: #2d2d2d;
+  --color-art-orange: #ff9b6b;
+  --color-art-yellow: #e8d754;
+
+  /* Font family */
+  --font-sans: "Avenir Next", "Segoe UI", sans-serif;
+}
+
+@layer base {
+  h1, h2, h3, h4, h5, h6 {
+    font-weight: bold;
+  }
+  h1 { font-size: 2em; }
+  h2 { font-size: 1.5em; }
+  h3 { font-size: 1.17em; }
+  h4 { font-size: 1em; }
+  h5 { font-size: 0.83em; }
+  h6 { font-size: 0.67em; }
+}
+
+/* Preserve existing global resets */
 :root {
-  font-family: 'Avenir Next', 'Segoe UI', sans-serif;
+  font-family: var(--font-sans);
   line-height: 1.5;
   font-weight: 400;
   font-synthesis: none;
