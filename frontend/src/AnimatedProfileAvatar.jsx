@@ -1,74 +1,46 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './AnimatedProfileAvatar.css'
+import { CHARACTER_COLORS } from './constants'
+import { useRandomBlink } from './hooks/useRandomBlink'
 
+// Shape, eyeStyle, backdrop, and mouthColor are component-specific (don't apply
+// to App's CHARACTER_AVATARS or LoginPage's larger render). The bg/pupil/eyeWhite
+// colors come from the shared CHARACTER_COLORS source of truth.
 const CHARACTERS = {
   purple: {
-    bg: '#6c3ff5',
+    bg: CHARACTER_COLORS.purple.bg,
     bodyShape: 'rect',
     eyeStyle: 'eyeball',
-    eyeWhite: '#FFFFFF',
-    pupilColor: '#252525',
+    eyeWhite: CHARACTER_COLORS.purple.eyeWhite,
+    pupilColor: CHARACTER_COLORS.purple.pupil,
     backdrop: '#efeef5',
     mouthColor: 'rgba(255,255,255,0.55)',
   },
   black: {
-    bg: '#2d2d2d',
+    bg: CHARACTER_COLORS.black.bg,
     bodyShape: 'rect',
     eyeStyle: 'eyeball',
-    eyeWhite: '#FFFFFF',
-    pupilColor: '#1D1D1D',
+    eyeWhite: CHARACTER_COLORS.black.eyeWhite,
+    pupilColor: CHARACTER_COLORS.black.pupil,
     backdrop: '#efeef5',
     mouthColor: 'rgba(255,255,255,0.5)',
   },
   orange: {
-    bg: '#ff9b6b',
+    bg: CHARACTER_COLORS.orange.bg,
     bodyShape: 'dome',
     eyeStyle: 'dot',
-    pupilColor: '#3A2B24',
+    pupilColor: CHARACTER_COLORS.orange.pupil,
     backdrop: '#fff0e8',
-    mouthColor: '#3A2B24',
+    mouthColor: CHARACTER_COLORS.orange.pupil,
   },
   yellow: {
-    bg: '#e8d754',
+    bg: CHARACTER_COLORS.yellow.bg,
     bodyShape: 'dome',
     eyeStyle: 'dot',
-    pupilColor: '#3A3420',
+    pupilColor: CHARACTER_COLORS.yellow.pupil,
     backdrop: '#fdf8e0',
-    mouthColor: '#3A3420',
+    mouthColor: CHARACTER_COLORS.yellow.pupil,
   },
-}
-
-function useRandomBlink(minMs = 2500, maxMs = 6000, blinkDuration = 150) {
-  const [isBlinking, setIsBlinking] = useState(false)
-
-  useEffect(() => {
-    let blinkTimer = null
-    let openTimer = null
-    let cancelled = false
-
-    const scheduleNext = () => {
-      const nextIn = minMs + Math.random() * (maxMs - minMs)
-      blinkTimer = window.setTimeout(() => {
-        if (cancelled) return
-        setIsBlinking(true)
-        openTimer = window.setTimeout(() => {
-          if (cancelled) return
-          setIsBlinking(false)
-          scheduleNext()
-        }, blinkDuration)
-      }, nextIn)
-    }
-
-    scheduleNext()
-
-    return () => {
-      cancelled = true
-      window.clearTimeout(blinkTimer)
-      window.clearTimeout(openTimer)
-    }
-  }, [blinkDuration, maxMs, minMs])
-
-  return isBlinking
 }
 
 function AnimatedProfileAvatar({ name, size = 40 }) {

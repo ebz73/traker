@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './ToastNotification.css'
+import { CHARACTER_COLORS } from './constants'
+import { pseudoRandom } from './utils'
 
 const ENTER_DELAY_MS = 30
 const AUTO_HIDE_MS = 10000
@@ -11,16 +13,20 @@ const CHARACTERS = [
   { type: 'yellow', delay: '240ms' },
 ]
 
-function pseudoRandom(seed) {
-  const x = Math.sin(seed) * 10000
-  return x - Math.floor(x)
-}
-
 function MiniConfetti({ active }) {
   const pieces = useMemo(() => {
     if (!active) return []
 
-    const colors = ['#6c3ff5', '#ff9b6b', '#e8d754', '#2d2d2d', '#34d399', '#60a5fa', '#f43f5e', '#f5f5f5']
+    const colors = [
+      CHARACTER_COLORS.purple.bg,
+      CHARACTER_COLORS.orange.bg,
+      CHARACTER_COLORS.yellow.bg,
+      CHARACTER_COLORS.black.bg,
+      '#34d399',
+      '#60a5fa',
+      '#f43f5e',
+      '#f5f5f5',
+    ]
 
     return Array.from({ length: 16 }, (_, index) => ({
       id: index,

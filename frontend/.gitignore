@@ -22,3 +22,9 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Refactor session artifacts (visual baselines, per-phase diffs, handoff log)
+.refactor-baseline/
+.refactor-phase-*/
+.refactor-tools/
+.refactor-log.md

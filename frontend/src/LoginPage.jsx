@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './LoginPage.css'
+import { CHARACTER_COLORS } from './constants'
+import { useAuth } from './hooks/useAuth'
+import { useRandomBlink } from './hooks/useRandomBlink'
+import { pseudoRandom } from './utils'
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
 const randomInRange = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min
-const pseudoRandom = (seed) => {
-  const x = Math.sin(seed) * 10000
-  return x - Math.floor(x)
-}
 
 function resolveLook({ deltaX, deltaY, maxDistance, forceLookX, forceLookY }) {
   if (typeof forceLookX === 'number' || typeof forceLookY === 'number') {
@@ -79,39 +79,6 @@ function Pupil({ size, maxDistance, pupilColor, forceLookX, forceLookY, deltaX, 
   )
 }
 
-function useRandomBlink(minMs, maxMs, blinkDurationMs = 170) {
-  const [isBlinking, setIsBlinking] = useState(false)
-
-  useEffect(() => {
-    let blinkTimer = null
-    let openTimer = null
-    let cancelled = false
-
-    const scheduleNext = () => {
-      const nextIn = randomInRange(minMs, maxMs)
-      blinkTimer = setTimeout(() => {
-        if (cancelled) return
-        setIsBlinking(true)
-        openTimer = setTimeout(() => {
-          if (cancelled) return
-          setIsBlinking(false)
-          scheduleNext()
-        }, blinkDurationMs)
-      }, nextIn)
-    }
-
-    scheduleNext()
-
-    return () => {
-      cancelled = true
-      if (blinkTimer) clearTimeout(blinkTimer)
-      if (openTimer) clearTimeout(openTimer)
-    }
-  }, [blinkDurationMs, maxMs, minMs])
-
-  return isBlinking
-}
-
 function getCharacterTrack(element, mouseX, mouseY) {
   if (!element) {
     return { deltaX: 0, deltaY: 0, skew: 0 }
@@ -131,7 +98,15 @@ function Confetti({ active }) {
   const pieces = useMemo(() => {
     if (!active) return []
 
-    const colors = ['#6c3ff5', '#ff9b6b', '#e8d754', '#2d2d2d', '#ff4d8d', '#4dc9f6', '#f5f5f5']
+    const colors = [
+      CHARACTER_COLORS.purple.bg,
+      CHARACTER_COLORS.orange.bg,
+      CHARACTER_COLORS.yellow.bg,
+      CHARACTER_COLORS.black.bg,
+      '#ff4d8d',
+      '#4dc9f6',
+      '#f5f5f5',
+    ]
 
     return Array.from({ length: 40 }, (_, i) => {
       const color = colors[i % colors.length]
@@ -166,21 +141,25 @@ function Confetti({ active }) {
   return <div className="lp-confetti-container">{pieces}</div>
 }
 
-function LoginPage({
-  authView,
-  setAuthView,
-  loginEmail,
-  setLoginEmail,
-  loginPassword,
-  setLoginPassword,
-  authError,
-  setAuthError,
-  authLoading,
-  authSuccess,
-  loginExiting,
-  handleLogin,
-  handleRegister,
-}) {
+function LoginPage() {
+  // Phase 6: LoginPage consumes useAuth() directly. The AuthProvider is mounted
+  // above this component (AppShell early-returns to LoginPage when !authToken),
+  // so all auth state + handlers are available via context.
+  const {
+    authView,
+    setAuthView,
+    loginEmail,
+    setLoginEmail,
+    loginPassword,
+    setLoginPassword,
+    authError,
+    setAuthError,
+    authLoading,
+    authSuccess,
+    loginExiting,
+    handleLogin,
+    handleRegister,
+  } = useAuth()
   const [showPassword, setShowPassword] = useState(false)
   const [isTyping, setIsTyping] = useState(false)
   const [purplePeek, setPurplePeek] = useState(false)
@@ -202,10 +181,10 @@ function LoginPage({
     yellow: { deltaX: -60, deltaY: 50, skew: 0.4 },
   })
 
-  const purpleBlinking = useRandomBlink(3000, 7000)
-  const blackBlinking = useRandomBlink(3400, 7400)
-  const orangeBlinking = useRandomBlink(3600, 7600)
-  const yellowBlinking = useRandomBlink(3900, 7900)
+  const purpleBlinking = useRandomBlink({ minMs: 3000, maxMs: 7000, blinkDuration: 170 })
+  const blackBlinking = useRandomBlink({ minMs: 3400, maxMs: 7400, blinkDuration: 170 })
+  const orangeBlinking = useRandomBlink({ minMs: 3600, maxMs: 7600, blinkDuration: 170 })
+  const yellowBlinking = useRandomBlink({ minMs: 3900, maxMs: 7900, blinkDuration: 170 })
   const passwordVisible = showPassword && loginPassword.trim().length > 0
   const purpleHiding = loginPassword.length > 0 && !showPassword
   const engagedExpression = purpleHiding || isTyping
@@ -463,8 +442,8 @@ function LoginPage({
                   size={18}
                   pupilSize={7}
                   maxDistance={5}
-                  eyeColor="#FFFFFF"
-                  pupilColor="#252525"
+                  eyeColor={CHARACTER_COLORS.purple.eyeWhite}
+                  pupilColor={CHARACTER_COLORS.purple.pupil}
                   isBlinking={purpleBlinking}
                   forceLookX={purpleForce?.x}
                   forceLookY={purpleForce?.y}
@@ -475,8 +454,8 @@ function LoginPage({
                   size={18}
                   pupilSize={7}
                   maxDistance={5}
-                  eyeColor="#FFFFFF"
-                  pupilColor="#252525"
+                  eyeColor={CHARACTER_COLORS.purple.eyeWhite}
+                  pupilColor={CHARACTER_COLORS.purple.pupil}
                   isBlinking={purpleBlinking}
                   forceLookX={purpleForce?.x}
                   forceLookY={purpleForce?.y}
@@ -507,8 +486,8 @@ function LoginPage({
                   size={16}
                   pupilSize={6}
                   maxDistance={4}
-                  eyeColor="#FFFFFF"
-                  pupilColor="#1D1D1D"
+                  eyeColor={CHARACTER_COLORS.black.eyeWhite}
+                  pupilColor={CHARACTER_COLORS.black.pupil}
                   isBlinking={blackBlinking}
                   forceLookX={blackForce?.x}
                   forceLookY={blackForce?.y}
@@ -519,8 +498,8 @@ function LoginPage({
                   size={16}
                   pupilSize={6}
                   maxDistance={4}
-                  eyeColor="#FFFFFF"
-                  pupilColor="#1D1D1D"
+                  eyeColor={CHARACTER_COLORS.black.eyeWhite}
+                  pupilColor={CHARACTER_COLORS.black.pupil}
                   isBlinking={blackBlinking}
                   forceLookX={blackForce?.x}
                   forceLookY={blackForce?.y}
@@ -543,7 +522,7 @@ function LoginPage({
                   <Pupil
                     size={12}
                     maxDistance={4}
-                    pupilColor="#3A2B24"
+                    pupilColor={CHARACTER_COLORS.orange.pupil}
                     forceLookX={orangeForce?.x}
                     forceLookY={orangeForce?.y}
                     deltaX={track.orange.deltaX}
@@ -556,7 +535,7 @@ function LoginPage({
                   <Pupil
                     size={12}
                     maxDistance={4}
-                    pupilColor="#3A2B24"
+                    pupilColor={CHARACTER_COLORS.orange.pupil}
                     forceLookX={orangeForce?.x}
                     forceLookY={orangeForce?.y}
                     deltaX={track.orange.deltaX}
@@ -588,7 +567,7 @@ function LoginPage({
                   <Pupil
                     size={12}
                     maxDistance={3.6}
-                    pupilColor="#3A3420"
+                    pupilColor={CHARACTER_COLORS.yellow.pupil}
                     forceLookX={yellowForce?.x}
                     forceLookY={yellowForce?.y}
                     deltaX={track.yellow.deltaX}
@@ -601,7 +580,7 @@ function LoginPage({
                   <Pupil
                     size={12}
                     maxDistance={3.6}
-                    pupilColor="#3A3420"
+                    pupilColor={CHARACTER_COLORS.yellow.pupil}
                     forceLookX={yellowForce?.x}
                     forceLookY={yellowForce?.y}
                     deltaX={track.yellow.deltaX}
