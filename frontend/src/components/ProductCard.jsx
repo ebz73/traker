@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { EMPTY_HISTORY, FREQUENCIES, HISTORY_WINDOWS } from '../constants'
 import { getPriceTrend, getWebsiteNameFallback, normalizeFrequency } from '../utils'
 import ChartErrorBoundary from './ChartErrorBoundary'
+import ConfirmDialog from './ConfirmDialog'
 import PriceHistoryChart from './PriceHistoryChart'
 import PriceHistoryChartSkeleton from './PriceHistoryChartSkeleton'
 
@@ -35,6 +36,7 @@ function ProductCard({
     Number(product.threshold) > 0 &&
     Number(product.lastPrice) <= Number(product.threshold)
   const [historyWindowDays, setHistoryWindowDays] = useState(30)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const historyDataCount = useMemo(() => {
     if (history.length === 0) return 0
     const now = product.lastChecked
@@ -108,11 +110,7 @@ function ProductCard({
           )}
           <button
             className="iconBtn"
-            onClick={() => {
-              if (window.confirm(`Remove "${product.name || 'this product'}" from your droplist?`)) {
-                onRemove(product.id)
-              }
-            }}
+            onClick={() => setShowDeleteConfirm(true)}
             aria-label={`Delete ${product.name || 'product'}`}
             type="button"
           >
@@ -261,6 +259,17 @@ function ProductCard({
           )}
         </div>
       )}
+
+      <ConfirmDialog
+        open={showDeleteConfirm}
+        onOpenChange={setShowDeleteConfirm}
+        title={`Remove "${product.name || 'this product'}" from your droplist?`}
+        description="This will stop tracking the product and remove its price history."
+        confirmText="Remove"
+        cancelText="Cancel"
+        destructive
+        onConfirm={() => onRemove(product.id)}
+      />
     </article>
   )
 }

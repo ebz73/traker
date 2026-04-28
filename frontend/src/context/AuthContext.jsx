@@ -72,16 +72,6 @@ export function AuthProvider({ children }) {
   )
 
   const deleteAccount = useCallback(async () => {
-    const confirmed = window.confirm(
-      'Are you sure you want to permanently delete your account? This will remove all your tracked products, price history, and settings. This action cannot be undone.'
-    )
-    if (!confirmed) return
-
-    const doubleConfirmed = window.confirm(
-      'This is permanent. All your data will be deleted immediately. Continue?'
-    )
-    if (!doubleConfirmed) return
-
     try {
       const res = await authFetch(`${API}/auth/account`, { method: 'DELETE' })
       if (!res.ok) {

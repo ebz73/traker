@@ -5,6 +5,7 @@ import { useAuth } from '../hooks/useAuth'
 import ThemeToggle from './ThemeToggle'
 import { useThemeContext } from '../context/ThemeContext'
 import { trapFocusWithin } from '../utils'
+import ConfirmDialog from './ConfirmDialog'
 
 // Phase 5 design decision (Option A): consumes useAuth + useThemeContext directly
 // rather than receiving values as props. Single-use component; testability
@@ -18,6 +19,7 @@ export default function ProfileDropdown() {
   const { avatarChar, changeAvatar } = useThemeContext()
 
   const [profileOpen, setProfileOpen] = useState(false)
+  const [showDeleteAccountConfirm, setShowDeleteAccountConfirm] = useState(false)
   const profileRef = useRef(null)
 
   const handleProfileWrapKeyDown = (event) => {
@@ -84,9 +86,7 @@ export default function ProfileDropdown() {
 
           <button
             className="profileDropdownDelete"
-            onClick={() => {
-              deleteAccount()
-            }}
+            onClick={() => setShowDeleteAccountConfirm(true)}
             type="button"
           >
             Delete Account
@@ -104,6 +104,17 @@ export default function ProfileDropdown() {
           </button>
         </div>
       )}
+
+      <ConfirmDialog
+        open={showDeleteAccountConfirm}
+        onOpenChange={setShowDeleteAccountConfirm}
+        title="Delete account permanently?"
+        description="This will permanently remove your account, all tracked products, price history, and settings. This action cannot be undone."
+        confirmText="Delete Account"
+        cancelText="Cancel"
+        destructive
+        onConfirm={deleteAccount}
+      />
     </div>
   )
 }
