@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import AnimatedProfileAvatar from '../AnimatedProfileAvatar'
 import { PROFILE_AVATAR_NAMES } from '../constants'
 import { useAuth } from '../hooks/useAuth'
+import ThemeToggle from './ThemeToggle'
 import { useThemeContext } from '../context/ThemeContext'
 import { trapFocusWithin } from '../utils'
 
@@ -14,7 +15,7 @@ import { trapFocusWithin } from '../utils'
 // useEffect-based reset needed — do NOT add one back.
 export default function ProfileDropdown() {
   const { authEmail, clearAuth, deleteAccount } = useAuth()
-  const { theme, toggleTheme, avatarChar, changeAvatar } = useThemeContext()
+  const { avatarChar, changeAvatar } = useThemeContext()
 
   const [profileOpen, setProfileOpen] = useState(false)
   const profileRef = useRef(null)
@@ -77,13 +78,7 @@ export default function ProfileDropdown() {
 
           <div className="profileDropdownDivider" />
 
-          <button
-            className="themeToggleBtn"
-            onClick={toggleTheme}
-            type="button"
-          >
-            {theme === 'dark' ? '☀️ Light Mode' : '🌙 Dark Mode'}
-          </button>
+          <ThemeToggle />
 
           <div className="profileDropdownDivider" />
 
