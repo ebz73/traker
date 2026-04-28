@@ -75,8 +75,6 @@ export function useNavigation() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }, [])
 
-  const navClass = useCallback((t) => `navBtn${tab === t ? ' active' : ''}`, [tab])
-
   return {
     tab,
     setTab,
@@ -86,6 +84,5 @@ export function useNavigation() {
     showBackToTop,
     droplistRef,
     scrollToTop,
-    navClass,
   }
 }
