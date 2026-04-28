@@ -1,5 +1,9 @@
-import { useEffect, useRef } from 'react'
-import { getFocusableElements, trapFocusWithin } from '../utils'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from '@/components/ui/dialog'
 
 function ExtensionPromptModal({
   show,
@@ -9,49 +13,18 @@ function ExtensionPromptModal({
   onSkip,
   onDismiss,
 }) {
-  const modalRef = useRef(null)
-
-  useEffect(() => {
-    if (!show) return undefined
-
-    const previousActiveElement = document.activeElement
-    const focusableElements = getFocusableElements(modalRef.current)
-    const nextFocusTarget = focusableElements[0] || modalRef.current
-    if (nextFocusTarget instanceof HTMLElement) nextFocusTarget.focus()
-
-    return () => {
-      if (previousActiveElement instanceof HTMLElement) previousActiveElement.focus()
-    }
-  }, [show])
-
-  if (!show) return null
+  const handleOpenChange = (nextOpen) => {
+    if (!nextOpen) onDismiss()
+  }
 
   return (
-    <div
-      className="extPromptOverlay"
-      role="presentation"
-      onClick={onDismiss}
-    >
-      <div
-        className="extPromptModal card"
-        ref={modalRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="ext-prompt-title"
-        aria-describedby="ext-prompt-description"
-        tabIndex="-1"
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => {
-          if (e.key === 'Escape') {
-            e.preventDefault()
-            onDismiss()
-            return
-          }
-          trapFocusWithin(e, modalRef.current)
-        }}
-      >
-        <h3 id="ext-prompt-title">Use Traker Extension?</h3>
-        <p id="ext-prompt-description">Install our Chrome extension for more accurate price tracking with a visual picker.</p>
+    <Dialog open={show} onOpenChange={handleOpenChange}>
+      <DialogContent className="sm:max-w-130">
+        <DialogTitle className="text-xl">Use Traker Extension?</DialogTitle>
+        <DialogDescription className="text-sm text-foreground">
+          Install our Chrome extension for more accurate price tracking with
+          a visual picker.
+        </DialogDescription>
 
         <label className="extPromptCheck">
           <input
@@ -70,8 +43,8 @@ function ExtensionPromptModal({
             Skip, use automatic detection
           </button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
