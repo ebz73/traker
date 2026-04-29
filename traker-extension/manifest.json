@@ -1,5 +1,6 @@
 {
   "manifest_version": 3,
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtnoahz5eN3dFRvXlEJrJz+7VlqLZYynPf2AurzZPN6QRnhHh/j9FxrrV/yznDI7gHnBkv2zhJpUyN5yiDQnpyb7EzTMEmd0pV/kCIakSAjLrr6VcmHD4ynxi+TmgQ9RKQ94q6mnX/Ytq9zMLDf5TV2M9tDuQ4Nsd/FbumhXNoEbJRrpurJwa9Z+ewPuKgT4VwYK+RvXBIiEFtIc1791yjMSdmfWrYLvAsGownafO0bSXubRFv40PftXb1BrP6ZKX4L1FzHoLEMXJjbrRQxjO1oIJFY+fT58lqLASLYPi61694w+SzRQsrFFb6n+jbJhhMGa7kSal+M2h8Bqv1hJ6TwIDAQAB",
   "name": "TRAKER",
   "version": "1.0.0",
   "description": "Track prices across any online store",
