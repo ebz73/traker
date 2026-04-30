@@ -9,7 +9,8 @@
     "storage",
     "alarms",
     "scripting",
-    "notifications"
+    "notifications",
+    "identity"
   ],
   "host_permissions": [
     "https://traker-api.azurewebsites.net/*"

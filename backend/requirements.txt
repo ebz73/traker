@@ -18,3 +18,4 @@ azure-mgmt-containerinstance
 curl_cffi
 resend
 # Resend email integration
+slowapi

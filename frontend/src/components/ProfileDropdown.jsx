@@ -15,7 +15,7 @@ import ConfirmDialog from './ConfirmDialog'
 // !authToken, so this component (and its profileOpen state) is destroyed. No
 // useEffect-based reset needed — do NOT add one back.
 export default function ProfileDropdown() {
-  const { authEmail, clearAuth, deleteAccount } = useAuth()
+  const { authEmail, signOut, deleteAccount } = useAuth()
   const { avatarChar, changeAvatar } = useThemeContext()
 
   const [profileOpen, setProfileOpen] = useState(false)
@@ -95,8 +95,8 @@ export default function ProfileDropdown() {
           <button
             className="profileDropdownLogout"
             onClick={() => {
-              clearAuth()
               setProfileOpen(false)
+              signOut()
             }}
             type="button"
           >

@@ -141,6 +141,17 @@ function Confetti({ active }) {
   return <div className="lp-confetti-container">{pieces}</div>
 }
 
+function GoogleIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+      <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.258h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" />
+      <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z" />
+      <path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z" />
+      <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" />
+    </svg>
+  )
+}
+
 function LoginPage() {
   // Phase 6: LoginPage consumes useAuth() directly. The AuthProvider is mounted
   // above this component (AppShell early-returns to LoginPage when !authToken),
@@ -152,6 +163,8 @@ function LoginPage() {
     setLoginEmail,
     loginPassword,
     setLoginPassword,
+    pendingEmail,
+    setPendingEmail,
     authError,
     setAuthError,
     authLoading,
@@ -159,12 +172,18 @@ function LoginPage() {
     loginExiting,
     handleLogin,
     handleRegister,
+    handleResendVerification,
+    handleForgotPassword,
+    handleResetPassword,
+    signInWithGoogle,
   } = useAuth()
   const [showPassword, setShowPassword] = useState(false)
   const [isTyping, setIsTyping] = useState(false)
   const [purplePeek, setPurplePeek] = useState(false)
   const [emotion, setEmotion] = useState('idle')
   const [isTransitioning, setIsTransitioning] = useState(false)
+  const [lastResendAt, setLastResendAt] = useState(0)
+  const [now, setNow] = useState(() => Date.now())
   const typingTimerRef = useRef(null)
   const transitionSwapTimerRef = useRef(null)
   const transitionEndTimerRef = useRef(null)
@@ -330,6 +349,28 @@ function LoginPage() {
     }
 
     await handleRegister()
+  }
+
+  const resendCooldownRemaining = Math.max(0, 30000 - (now - lastResendAt))
+
+  useEffect(() => {
+    if (resendCooldownRemaining <= 0) return
+    const timer = setInterval(() => setNow(Date.now()), 250)
+    return () => clearInterval(timer)
+  }, [resendCooldownRemaining])
+
+  const handleResendClick = async () => {
+    if (resendCooldownRemaining > 0) return
+    setLastResendAt(Date.now())
+    setNow(Date.now())
+    await handleResendVerification()
+  }
+
+  const handleBackToLogin = () => {
+    setLoginPassword('')
+    setPendingEmail('')
+    setAuthError('')
+    setAuthView('login')
   }
 
   const purpleForce = useMemo(() => {
@@ -607,11 +648,218 @@ function LoginPage() {
             <div className="lp-brandText lp-brandTextDark">TRAKER</div>
           </div>
 
-          <div>
-            <h1 className="lp-heading">{isLogin ? 'Welcome back!' : 'Create account'}</h1>
-            <p className="lp-subtitle">Please enter your details</p>
-          </div>
+          {(isLogin || authView === 'register') && (
+            <div>
+              <h1 className="lp-heading">{isLogin ? 'Welcome back!' : 'Create account'}</h1>
+              <p className="lp-subtitle">Please enter your details</p>
+            </div>
+          )}
 
+          {authView === 'verify-email' && (
+            <>
+              <div>
+                <h1 className="lp-heading">Check your email</h1>
+                <p className="lp-subtitle">
+                  We sent a confirmation link to <strong>{pendingEmail}</strong>. Click the link to activate your account, then come back here to log in.
+                </p>
+              </div>
+              <div className="lp-form">
+                <button
+                  className="lp-toggleBtn"
+                  type="button"
+                  onClick={handleResendClick}
+                  disabled={resendCooldownRemaining > 0}
+                >
+                  {resendCooldownRemaining > 0
+                    ? `Resend available in ${Math.ceil(resendCooldownRemaining / 1000)}s`
+                    : "Didn't get it? Resend email"}
+                </button>
+                <button
+                  className="lp-toggleBtn"
+                  type="button"
+                  onClick={handleBackToLogin}
+                >
+                  ← Back to Login
+                </button>
+              </div>
+            </>
+          )}
+
+          {authView === 'verify-email-error' && (
+            <>
+              <div>
+                <h1 className="lp-heading">Verification failed</h1>
+                <p className="lp-subtitle">
+                  {authError || 'This verification link is invalid or has expired.'}
+                </p>
+              </div>
+              <div className="lp-form">
+                {pendingEmail && (
+                  <button
+                    className="lp-toggleBtn"
+                    type="button"
+                    onClick={handleResendClick}
+                    disabled={resendCooldownRemaining > 0}
+                  >
+                    {resendCooldownRemaining > 0
+                      ? `Resend available in ${Math.ceil(resendCooldownRemaining / 1000)}s`
+                      : 'Send a new verification email'}
+                  </button>
+                )}
+                <button
+                  className="lp-toggleBtn"
+                  type="button"
+                  onClick={handleBackToLogin}
+                >
+                  ← Back to Login
+                </button>
+              </div>
+            </>
+          )}
+
+          {authView === 'forgot-password' && (
+            <>
+              <div>
+                <h1 className="lp-heading">Reset password</h1>
+                <p className="lp-subtitle">Enter your email and we'll send you a reset link.</p>
+              </div>
+              <form
+                className="lp-form"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  if (!loginEmail || authLoading) return
+                  handleForgotPassword(loginEmail)
+                }}
+              >
+                <div className="lp-field">
+                  <label className="lp-label" htmlFor="lp-forgot-email">Email</label>
+                  <input
+                    id="lp-forgot-email"
+                    className="lp-input"
+                    type="email"
+                    autoComplete="email"
+                    value={loginEmail}
+                    onChange={handleEmailChange}
+                    placeholder="you@example.com"
+                  />
+                </div>
+                {authError && <div className="lp-error">{authError}</div>}
+                <button
+                  className="lp-submitBtn"
+                  type="submit"
+                  disabled={authLoading || !loginEmail}
+                >
+                  {authLoading ? 'Sending…' : 'Send reset link'}
+                </button>
+                <button
+                  className="lp-toggleBtn"
+                  type="button"
+                  onClick={handleBackToLogin}
+                >
+                  ← Back to Login
+                </button>
+              </form>
+            </>
+          )}
+
+          {authView === 'forgot-sent' && (
+            <>
+              <div>
+                <h1 className="lp-heading">Check your email</h1>
+                <p className="lp-subtitle">
+                  We sent a password reset link to <strong>{pendingEmail}</strong>. Click the link in the email to set a new password.
+                </p>
+              </div>
+              <div className="lp-form">
+                <button
+                  className="lp-toggleBtn"
+                  type="button"
+                  onClick={handleBackToLogin}
+                >
+                  ← Back to Login
+                </button>
+              </div>
+            </>
+          )}
+
+          {authView === 'reset-password' && (
+            <>
+              <div>
+                <h1 className="lp-heading">Set new password</h1>
+                <p className="lp-subtitle">Enter your new password below.</p>
+              </div>
+              <form
+                className="lp-form"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  if (!loginPassword || authLoading) return
+                  handleResetPassword(loginPassword)
+                }}
+              >
+                <div className="lp-field">
+                  <label className="lp-label" htmlFor="lp-new-password">New password</label>
+                  <div className="lp-passwordWrap">
+                    <input
+                      id="lp-new-password"
+                      className="lp-input lp-passwordInput"
+                      type={showPassword ? 'text' : 'password'}
+                      autoComplete="new-password"
+                      value={loginPassword}
+                      onChange={handlePasswordChange}
+                      placeholder="At least 8 characters with letters and digits"
+                    />
+                    <button
+                      className="lp-passwordToggle"
+                      type="button"
+                      onClick={() => setShowPassword((prev) => !prev)}
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      aria-pressed={showPassword}
+                    >
+                      {showPassword ? (
+                        <svg
+                          width="20"
+                          height="20"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                          <circle cx="12" cy="12" r="3" />
+                        </svg>
+                      ) : (
+                        <svg
+                          width="20"
+                          height="20"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24" />
+                          <line x1="1" y1="1" x2="23" y2="23" />
+                        </svg>
+                      )}
+                    </button>
+                  </div>
+                </div>
+                {authError && <div className="lp-error">{authError}</div>}
+                <button
+                  className="lp-submitBtn"
+                  type="submit"
+                  disabled={authLoading || !loginPassword}
+                >
+                  {authLoading ? 'Updating…' : 'Update password'}
+                </button>
+              </form>
+            </>
+          )}
+
+          {(isLogin || authView === 'register') && (
           <form className="lp-form" onSubmit={handleSubmit}>
             <div className="lp-field">
               <label className="lp-label" htmlFor="lp-email">Email</label>
@@ -677,6 +925,19 @@ function LoginPage() {
                   )}
                 </button>
               </div>
+              {isLogin && (
+                <button
+                  className="lp-forgotLink"
+                  type="button"
+                  onClick={() => {
+                    setAuthError('')
+                    setAuthView('forgot-password')
+                  }}
+                  disabled={authLoading}
+                >
+                  Forgot password?
+                </button>
+              )}
             </div>
 
             {authError && <div className="lp-error">{authError}</div>}
@@ -689,6 +950,20 @@ function LoginPage() {
                   : (isLogin ? "Log in" : "Register")}
             </button>
 
+            <div className="lp-divider">
+              <span className="lp-dividerText">or</span>
+            </div>
+
+            <button
+              className="lp-googleBtn"
+              type="button"
+              onClick={signInWithGoogle}
+              disabled={authLoading || authSuccess || loginExiting}
+            >
+              <GoogleIcon />
+              <span>Continue with Google</span>
+            </button>
+
             <button className="lp-toggleBtn" type="button" onClick={handleToggleMode} disabled={authLoading || isTransitioning}>
               <span className="lp-togglePrefix">
                 {isLogin ? "Don't have an account? " : 'Already have an account? '}
@@ -698,6 +973,7 @@ function LoginPage() {
               </span>
             </button>
           </form>
+          )}
         </div>
       </section>
     </div>

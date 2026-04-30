@@ -19,7 +19,7 @@ import { useAuth } from './hooks/useAuth'
 
 
 function AppShell() {
-  const { authToken } = useAuth()
+  const { authToken, authView } = useAuth()
   const { tab } = useNavigationContext()
   const ext = useExtensionIntegrationContext()
   const products = useProductsContext()
@@ -40,7 +40,7 @@ function AppShell() {
     if (result?.ok) form.reset()
   }
 
-  if (!authToken) return <LoginPage />
+  if (!authToken || authView === 'verify-email-error' || authView === 'reset-password') return <LoginPage />
 
   return (
     <div className="pageBg">

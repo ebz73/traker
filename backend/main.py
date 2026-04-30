@@ -22,8 +22,10 @@
 #       -H "Authorization: Bearer <token>"
 # ──────────────────────────────────────────────────────────
 
+import base64
 import datetime
 import copy
+import hashlib
 import ipaddress
 import json
 import logging
@@ -60,16 +62,20 @@ except ImportError:
     _RESEND_AVAILABLE = False
 
 from bs4 import BeautifulSoup
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.responses import RedirectResponse
+from fastapi.security import OAuth2PasswordBearer
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from patchright.sync_api import Locator
 from patchright.sync_api import TimeoutError as PlaywrightTimeoutError
 from patchright.sync_api import sync_playwright
 from pydantic import BaseModel
-from sqlalchemy import Boolean, Column, DateTime, Float, Index, Integer, String, cast, create_engine, func, inspect, or_, text
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, String, cast, create_engine, func, inspect, or_, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
@@ -166,7 +172,8 @@ logging.basicConfig(level=logging.INFO)
 
 JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret-change-in-production")
 ACCESS_TOKEN_MINUTES = int(os.getenv("ACCESS_TOKEN_MINUTES", "60"))
-REFRESH_TOKEN_DAYS = int(os.getenv("REFRESH_TOKEN_DAYS", "30"))
+WEB_REFRESH_TOKEN_HOURS = 24
+EXTENSION_REFRESH_TOKEN_EXPIRES_AT = None  # extension refresh tokens don't expire; only revoked
 AUTO_CREATE_SCHEMA = os.getenv("AUTO_CREATE_SCHEMA", "true").lower() in ("true", "1", "yes")
 ALLOWED_ORIGINS = [
     o.strip()
@@ -684,21 +691,129 @@ def _touch_aci_idle_timer():
 # --- Email alert configuration ---
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
 EMAIL_FROM = os.getenv("EMAIL_FROM", "onboarding@resend.dev")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 EMAIL_ALERTS_ENABLED = os.getenv("EMAIL_ALERTS_ENABLED", "true").lower() in ("true", "1", "yes")
 ALERT_DIGEST_INTERVAL_HOURS = int(os.getenv("ALERT_DIGEST_INTERVAL_HOURS", "6"))
 
 if _RESEND_AVAILABLE and RESEND_API_KEY:
     resend.api_key = RESEND_API_KEY
 
-# Lightweight in-memory denylist for revoked refresh tokens.
-# Only needs to last until access tokens issued alongside them expire (ACCESS_TOKEN_MINUTES).
-# Cleared on server restart, which is acceptable because:
-#   - Access tokens are short-lived (60 min)
-#   - After restart, old access tokens expire naturally
-#   - Entra ID migration will replace this entirely
-_REVOKED_REFRESH_TOKENS: Dict[str, float] = {}  # jti -> revoked_at timestamp
-_REVOKED_REFRESH_LOCK = threading.Lock()
-_REVOKED_REFRESH_MAX_AGE = 60 * 60 * 2  # Keep entries for 2 hours then auto-purge
+
+def send_auth_email(to_email: str, subject: str, html_body: str, text_body: str) -> bool:
+    """
+    Send an authentication-related email via Resend.
+    Returns True on success, False on failure (logged but not raised).
+    """
+    if not _RESEND_AVAILABLE or not RESEND_API_KEY:
+        logger.warning("send_auth_email skipped — Resend not configured. to=%s subject=%s", to_email, subject)
+        return False
+
+    try:
+        from_name = os.getenv("EMAIL_FROM_NAME", "TRAKER")
+        resend.Emails.send({
+            "from": f"{from_name} <{EMAIL_FROM}>",
+            "to": [to_email],
+            "subject": subject,
+            "html": html_body,
+            "text": text_body,
+        })
+        logger.info("send_auth_email_success to=%s subject=%s", to_email, subject)
+        return True
+    except Exception as exc:
+        logger.exception("send_auth_email_failed to=%s subject=%s: %s", to_email, subject, exc)
+        return False
+
+
+def _email_logo_block() -> str:
+    """
+    Returns a centered <img> block for the TRAKER logo, or empty string in dev.
+    Skipped when FRONTEND_URL points at localhost since email clients fetch the
+    image from their own servers and can't reach the dev box.
+    """
+    if "localhost" in FRONTEND_URL or "127.0.0.1" in FRONTEND_URL:
+        return ""
+    return (
+        '<div style="text-align: center; margin-bottom: 32px;">'
+        f'<img src="{FRONTEND_URL}/email-logo.png" alt="TRAKER" width="64" height="64" '
+        'style="display: inline-block; border-radius: 12px;" />'
+        '</div>'
+    )
+
+
+def _verify_email_template(verify_url: str) -> Tuple[str, str]:
+    logo = _email_logo_block()
+    html = f"""
+<!DOCTYPE html>
+<html><body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px;">
+  {logo}
+  <h1 style="color: #6366f1;">Welcome to TRAKER</h1>
+  <p>Please verify your email address to activate your account.</p>
+  <p style="margin: 24px 0;">
+    <a href="{verify_url}" style="background: #6366f1; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; display: inline-block;">Verify email</a>
+  </p>
+  <p style="color: #666; font-size: 14px;">Or paste this link in your browser:<br><span style="word-break: break-all;">{verify_url}</span></p>
+  <p style="color: #999; font-size: 13px; margin-top: 32px;">This link expires in 24 hours. If you didn't sign up for TRAKER, you can safely ignore this email.</p>
+</body></html>
+"""
+    text = f"""Welcome to TRAKER
+
+Please verify your email address to activate your account.
+
+{verify_url}
+
+This link expires in 24 hours. If you didn't sign up for TRAKER, you can safely ignore this email.
+"""
+    return html, text
+
+
+def _password_reset_template(reset_url: str, is_google_only: bool) -> Tuple[str, str]:
+    logo = _email_logo_block()
+    if is_google_only:
+        login_url = FRONTEND_URL
+        html = f"""
+<!DOCTYPE html>
+<html><body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px;">
+  {logo}
+  <h1 style="color: #6366f1;">Password reset</h1>
+  <p>You requested a password reset, but this account uses <strong>Google sign-in</strong> — there's no password to reset.</p>
+  <p style="margin: 24px 0;">
+    <a href="{login_url}" style="background: #6366f1; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; display: inline-block;">Sign in with Google</a>
+  </p>
+  <p style="color: #999; font-size: 13px; margin-top: 32px;">If you didn't request this, you can safely ignore this email.</p>
+</body></html>
+"""
+        text = f"""Password reset
+
+You requested a password reset, but this account uses Google sign-in — there's no password to reset.
+
+Sign in: {login_url}
+
+If you didn't request this, you can safely ignore this email.
+"""
+        return html, text
+
+    html = f"""
+<!DOCTYPE html>
+<html><body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px;">
+  {logo}
+  <h1 style="color: #6366f1;">Reset your password</h1>
+  <p>Click the link below to set a new password.</p>
+  <p style="margin: 24px 0;">
+    <a href="{reset_url}" style="background: #6366f1; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; display: inline-block;">Reset password</a>
+  </p>
+  <p style="color: #666; font-size: 14px;">Or paste this link in your browser:<br><span style="word-break: break-all;">{reset_url}</span></p>
+  <p style="color: #999; font-size: 13px; margin-top: 32px;">This link expires in 1 hour. If you didn't request a password reset, you can safely ignore this email.</p>
+</body></html>
+"""
+    text = f"""Reset your password
+
+Click the link below to set a new password.
+
+{reset_url}
+
+This link expires in 1 hour. If you didn't request a password reset, you can safely ignore this email.
+"""
+    return html, text
 
 
 def _anti_bot_sleep(low: float, high: float) -> None:
@@ -914,34 +1029,48 @@ def decode_access_token(token: str) -> Optional[int]:
         return None
 
 
-def create_refresh_token(user_id: int) -> str:
+def create_refresh_token(user_id: int, client_type: str, db: Session) -> str:
     """
-    Create a long-lived JWT refresh token.
-    Contains type="refresh" claim to distinguish from access tokens.
-    Uses a unique jti (JWT ID) for revocation tracking.
-
-    NOTE (Azure migration): This function will be replaced by Entra ID's
-    OAuth2 token issuance. The extension-side code that stores/sends
-    refresh tokens will remain unchanged.
+    Create a refresh token and persist its jti to refresh_tokens.
+    client_type: 'web' (24h expiry) or 'extension' (no expiry, only revoked on logout / password reset).
     """
     jti = secrets.token_urlsafe(32)
-    expire = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=REFRESH_TOKEN_DAYS)
-    return jwt.encode(
-        {"sub": str(user_id), "exp": expire, "type": "refresh", "jti": jti},
-        JWT_SECRET,
-        algorithm="HS256",
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if client_type == "web":
+        expires_at = now + datetime.timedelta(hours=WEB_REFRESH_TOKEN_HOURS)
+    elif client_type == "extension":
+        expires_at = None
+    else:
+        raise ValueError(f"Unknown client_type: {client_type}")
+
+    payload = {"sub": str(user_id), "type": "refresh", "jti": jti, "client_type": client_type}
+    if expires_at is not None:
+        payload["exp"] = expires_at
+
+    token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+    record = RefreshTokenRecord(
+        jti=jti,
+        user_id=user_id,
+        client_type=client_type,
+        expires_at=expires_at.replace(tzinfo=None) if expires_at is not None else None,
     )
+    db.add(record)
+    db.commit()
+    return token
 
 
-def decode_refresh_token(token: str) -> Optional[Dict[str, Any]]:
+def decode_refresh_token(raw_token: str, db: Session) -> Optional[Dict[str, Any]]:
     """
-    Decode and validate a refresh token JWT. Returns the payload dict if valid,
-    or None if invalid/expired/wrong type/revoked.
+    Validate a refresh token. Returns payload dict if valid, None otherwise.
+    Checks JWT signature, type claim, jti exists in refresh_tokens, not revoked, not expired.
+    JWT exp verification is disabled because extension tokens have no exp claim;
+    expiry is enforced from the DB instead.
     """
-    if not token:
+    if not raw_token:
         return None
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+        payload = jwt.decode(raw_token, JWT_SECRET, algorithms=["HS256"], options={"verify_exp": False})
     except (JWTError, ValueError):
         return None
 
@@ -952,43 +1081,63 @@ def decode_refresh_token(token: str) -> Optional[Dict[str, Any]]:
     if not jti:
         return None
 
-    # Check in-memory denylist
-    with _REVOKED_REFRESH_LOCK:
-        if jti in _REVOKED_REFRESH_TOKENS:
-            return None
+    record = db.query(RefreshTokenRecord).filter(RefreshTokenRecord.jti == jti).first()
+    if not record:
+        return None
+    if record.revoked_at is not None:
+        return None
+    if record.expires_at is not None and record.expires_at < datetime.datetime.utcnow():
+        return None
+
+    record.last_used_at = datetime.datetime.utcnow()
+    db.commit()
 
     return payload
 
 
-def _revoke_refresh_jti(jti: str) -> None:
-    """Add a refresh token's jti to the in-memory denylist."""
+def revoke_refresh_token_by_jti(jti: str, db: Session) -> bool:
     if not jti:
-        return
-    now = time.time()
-    with _REVOKED_REFRESH_LOCK:
-        _REVOKED_REFRESH_TOKENS[jti] = now
-        # Purge old entries to prevent unbounded growth
-        if len(_REVOKED_REFRESH_TOKENS) > 500:
-            cutoff = now - _REVOKED_REFRESH_MAX_AGE
-            stale = [k for k, v in _REVOKED_REFRESH_TOKENS.items() if v < cutoff]
-            for k in stale:
-                del _REVOKED_REFRESH_TOKENS[k]
+        return False
+    record = db.query(RefreshTokenRecord).filter(RefreshTokenRecord.jti == jti).first()
+    if record and record.revoked_at is None:
+        record.revoked_at = datetime.datetime.utcnow()
+        db.commit()
+        return True
+    return False
 
 
-def revoke_refresh_token(raw_token: str) -> bool:
-    """Revoke a refresh token by adding its jti to the denylist."""
+def revoke_refresh_token(raw_token: str, db: Session) -> bool:
+    """Revoke a refresh token by marking its DB row revoked. JWT exp not required (extension tokens have none)."""
     if not raw_token:
         return False
     try:
-        # Decode WITHOUT checking denylist - we need the jti even if already revoked
-        payload = jwt.decode(raw_token, JWT_SECRET, algorithms=["HS256"])
+        payload = jwt.decode(raw_token, JWT_SECRET, algorithms=["HS256"], options={"verify_exp": False})
     except (JWTError, ValueError):
         return False
     jti = payload.get("jti")
     if not jti:
         return False
-    _revoke_refresh_jti(jti)
-    return True
+    return revoke_refresh_token_by_jti(jti, db)
+
+
+def revoke_all_refresh_tokens_for_user(user_id: int, db: Session, except_jti: Optional[str] = None) -> int:
+    """
+    Mark all of a user's active refresh tokens as revoked.
+    If except_jti is provided, that token is left alone. Returns count revoked.
+    """
+    q = db.query(RefreshTokenRecord).filter(
+        RefreshTokenRecord.user_id == user_id,
+        RefreshTokenRecord.revoked_at.is_(None),
+    )
+    if except_jti:
+        q = q.filter(RefreshTokenRecord.jti != except_jti)
+    now = datetime.datetime.utcnow()
+    count = 0
+    for record in q.all():
+        record.revoked_at = now
+        count += 1
+    db.commit()
+    return count
 
 
 def _currency_code_from_token(raw_token: Optional[str]) -> Optional[str]:
@@ -1286,8 +1435,45 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String, unique=True, nullable=False, index=True)
-    password_hash = Column(String, nullable=False)
+    password_hash = Column(String, nullable=True)
+    google_sub = Column(String, unique=True, nullable=True, index=True)
+    email_verified = Column(Boolean, nullable=False, default=False)
+    password_changed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class EmailVerification(Base):
+    __tablename__ = "email_verifications"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    token = Column(String(64), unique=True, nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    last_sent_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow)
+
+
+class PasswordReset(Base):
+    __tablename__ = "password_resets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    token = Column(String(64), unique=True, nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow)
+
+
+class RefreshTokenRecord(Base):
+    __tablename__ = "refresh_tokens"
+
+    jti = Column(String(64), primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    client_type = Column(String(20), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow)
+    last_used_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow)
+    expires_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
 
 
 class PriceHistory(Base):
@@ -1449,7 +1635,11 @@ async def lifespan(app: FastAPI):
                 _ACI_IDLE_TIMER.cancel()
 
 
+limiter = Limiter(key_func=get_remote_address, default_limits=["100/hour"])
+
 app = FastAPI(lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -1539,25 +1729,72 @@ class RefreshTokenRequest(BaseModel):
     refresh_token: str
 
 
+class AuthLoginRequest(BaseModel):
+    email: str
+    password: str
+    client_type: str = "web"
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str
+
+
+class ResendVerificationRequest(BaseModel):
+    email: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
 @app.post("/auth/register")
-def auth_register(payload: AuthRegisterRequest):
+@limiter.limit("3/hour")
+def auth_register(request: Request, payload: AuthRegisterRequest):
     email = (payload.email or "").strip().lower()
     password = payload.password or ""
     if "@" not in email or "." not in email:
         raise HTTPException(status_code=400, detail="Invalid email")
     if len(password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    has_letter = any(c.isalpha() for c in password)
+    has_digit = any(c.isdigit() for c in password)
+    if not (has_letter and has_digit):
+        raise HTTPException(status_code=400, detail="Password must contain letters and digits")
 
     try:
         with SessionLocal() as db:
             existing = db.query(User).filter(User.email == email).first()
             if existing:
-                raise HTTPException(status_code=409, detail="Email already registered")
-            user = User(email=email, password_hash=hash_password(password))
+                # Enumeration resistance: respond as if signup succeeded.
+                logger.info("auth_register_duplicate_email_silent email=%s", email)
+                return {"ok": True, "email": email}
+
+            user = User(email=email, password_hash=hash_password(password), email_verified=False)
             db.add(user)
             db.commit()
             db.refresh(user)
-            return {"id": user.id, "email": user.email}
+
+            token = secrets.token_urlsafe(32)
+            verification = EmailVerification(
+                user_id=user.id,
+                token=token,
+                expires_at=datetime.datetime.utcnow() + datetime.timedelta(hours=24),
+            )
+            db.add(verification)
+            db.commit()
+
+            frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
+            verify_url = f"{frontend_url}/?verify_token={token}&email={email}"
+            html, text = _verify_email_template(verify_url)
+            send_auth_email(email, "Verify your TRAKER account", html, text)
+
+            logger.info("auth_register_success user_id=%d email=%s", user.id, email)
+            return {"ok": True, "email": email}
     except HTTPException:
         raise
     except SQLAlchemyError as exc:
@@ -1565,20 +1802,187 @@ def auth_register(payload: AuthRegisterRequest):
         raise HTTPException(status_code=500, detail="Failed to register user")
 
 
+@app.post("/auth/verify-email", response_model=AuthTokenResponse)
+@limiter.limit("10/hour")
+def auth_verify_email(request: Request, payload: VerifyEmailRequest):
+    token = (payload.token or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="Token is required")
+
+    with SessionLocal() as db:
+        record = db.query(EmailVerification).filter(EmailVerification.token == token).first()
+        if not record:
+            raise HTTPException(status_code=400, detail="Invalid or expired verification link")
+        if record.expires_at < datetime.datetime.utcnow():
+            db.delete(record)
+            db.commit()
+            raise HTTPException(status_code=400, detail="Verification link expired")
+
+        user = db.query(User).filter(User.id == record.user_id).first()
+        if not user:
+            db.delete(record)
+            db.commit()
+            raise HTTPException(status_code=400, detail="Invalid verification link")
+
+        already_verified = user.email_verified
+        user.email_verified = True
+        db.delete(record)
+        db.commit()
+
+        access = create_access_token(user.id)
+        refresh = create_refresh_token(user.id, "web", db)
+
+        logger.info("auth_verify_success user_id=%d already=%s", user.id, already_verified)
+        return AuthTokenResponse(access_token=access, refresh_token=refresh)
+
+
+@app.post("/auth/resend-verification")
+@limiter.limit("3/hour")
+def auth_resend_verification(request: Request, payload: ResendVerificationRequest):
+    email = (payload.email or "").strip().lower()
+    if "@" not in email:
+        # Silent success for enumeration resistance.
+        return {"ok": True}
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.email == email).first()
+        if not user or user.email_verified:
+            return {"ok": True}
+
+        latest = (
+            db.query(EmailVerification)
+            .filter(EmailVerification.user_id == user.id)
+            .order_by(EmailVerification.last_sent_at.desc())
+            .first()
+        )
+        if latest and (datetime.datetime.utcnow() - latest.last_sent_at).total_seconds() < 30:
+            raise HTTPException(status_code=429, detail="Please wait before requesting another email.")
+
+        db.query(EmailVerification).filter(EmailVerification.user_id == user.id).delete()
+
+        token = secrets.token_urlsafe(32)
+        verification = EmailVerification(
+            user_id=user.id,
+            token=token,
+            expires_at=datetime.datetime.utcnow() + datetime.timedelta(hours=24),
+        )
+        db.add(verification)
+        db.commit()
+
+        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
+        verify_url = f"{frontend_url}/?verify_token={token}&email={email}"
+        html, text = _verify_email_template(verify_url)
+        send_auth_email(email, "Verify your TRAKER account", html, text)
+
+        return {"ok": True}
+
+
+@app.post("/auth/forgot-password")
+@limiter.limit("3/hour")
+def auth_forgot_password(request: Request, payload: ForgotPasswordRequest):
+    email = (payload.email or "").strip().lower()
+    if "@" not in email:
+        return {"ok": True}  # silent
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.email == email).first()
+        if not user:
+            # Enumeration resistance — pretend success.
+            return {"ok": True}
+
+        # 15s cooldown — silently swallow rather than 429 (enumeration resistance).
+        latest = (
+            db.query(PasswordReset)
+            .filter(PasswordReset.user_id == user.id, PasswordReset.used_at.is_(None))
+            .order_by(PasswordReset.created_at.desc())
+            .first()
+        )
+        if latest and (datetime.datetime.utcnow() - latest.created_at).total_seconds() < 15:
+            return {"ok": True}
+
+        # Invalidate all previous unused reset tokens for this user.
+        db.query(PasswordReset).filter(
+            PasswordReset.user_id == user.id,
+            PasswordReset.used_at.is_(None),
+        ).delete()
+
+        token = secrets.token_urlsafe(32)
+        reset = PasswordReset(
+            user_id=user.id,
+            token=token,
+            expires_at=datetime.datetime.utcnow() + datetime.timedelta(hours=1),
+        )
+        db.add(reset)
+        db.commit()
+
+        is_google_only = user.password_hash is None
+        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
+        reset_url = f"{frontend_url}/?reset_token={token}"
+        html, text = _password_reset_template(reset_url, is_google_only)
+        subject = "Log in to TRAKER" if is_google_only else "Reset your TRAKER password"
+        send_auth_email(email, subject, html, text)
+
+        return {"ok": True}
+
+
+@app.post("/auth/reset-password", response_model=AuthTokenResponse)
+@limiter.limit("5/hour")
+def auth_reset_password(request: Request, payload: ResetPasswordRequest):
+    token = (payload.token or "").strip()
+    new_password = payload.new_password or ""
+    if not token:
+        raise HTTPException(status_code=400, detail="Token is required")
+    if len(new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    has_letter = any(c.isalpha() for c in new_password)
+    has_digit = any(c.isdigit() for c in new_password)
+    if not (has_letter and has_digit):
+        raise HTTPException(status_code=400, detail="Password must contain letters and digits")
+
+    with SessionLocal() as db:
+        record = db.query(PasswordReset).filter(PasswordReset.token == token).first()
+        if not record or record.used_at is not None:
+            raise HTTPException(status_code=400, detail="Invalid or expired reset link")
+        if record.expires_at < datetime.datetime.utcnow():
+            raise HTTPException(status_code=400, detail="Reset link expired")
+
+        user = db.query(User).filter(User.id == record.user_id).first()
+        if not user:
+            raise HTTPException(status_code=400, detail="Invalid reset link")
+
+        user.password_hash = hash_password(new_password)
+        user.password_changed_at = datetime.datetime.utcnow()
+        record.used_at = datetime.datetime.utcnow()
+
+        # Revoke all existing refresh tokens (other devices). The new pair below
+        # replaces the current device's tokens client-side, keeping it alive.
+        revoke_all_refresh_tokens_for_user(user.id, db)
+
+        db.commit()
+
+        access = create_access_token(user.id)
+        refresh = create_refresh_token(user.id, "web", db)
+
+        logger.info("auth_reset_password_success user_id=%d", user.id)
+        return AuthTokenResponse(access_token=access, refresh_token=refresh)
+
+
 @app.post("/auth/login", response_model=AuthTokenResponse)
-def auth_login(form_data: OAuth2PasswordRequestForm = Depends()):
-    email = (form_data.username or "").strip().lower()
-    password = form_data.password or ""
+@limiter.limit("5/minute")
+def auth_login(request: Request, payload: AuthLoginRequest):
+    email = (payload.email or "").strip().lower()
+    password = payload.password or ""
+    client_type = payload.client_type if payload.client_type in ("web", "extension") else "web"
     try:
         with SessionLocal() as db:
             user = db.query(User).filter(User.email == email).first()
-            if not user or not verify_password(password, user.password_hash):
+            if not user or not user.password_hash or not verify_password(password, user.password_hash):
                 logger.info("auth_login_failed email=%s", email)
                 raise HTTPException(status_code=401, detail="Invalid email or password")
-            logger.info("auth_login_success user_id=%d email=%s", user.id, email)
+            logger.info("auth_login_success user_id=%d email=%s client_type=%s", user.id, email, client_type)
             return AuthTokenResponse(
                 access_token=create_access_token(user.id),
-                refresh_token=create_refresh_token(user.id),
+                refresh_token=create_refresh_token(user.id, client_type, db),
             )
     except HTTPException:
         raise
@@ -1589,63 +1993,296 @@ def auth_login(form_data: OAuth2PasswordRequestForm = Depends()):
 
 @app.get("/auth/me")
 def auth_me(user: User = Depends(get_current_user)):
-    return {"id": user.id, "email": user.email}
+    return {"id": user.id, "email": user.email, "email_verified": bool(user.email_verified)}
 
 
 @app.post("/auth/refresh", response_model=AuthTokenResponse)
-def auth_refresh(payload: RefreshTokenRequest):
+@limiter.limit("30/minute")
+def auth_refresh(request: Request, payload: RefreshTokenRequest):
     """
     Exchange a valid refresh token for a new access token + rotated refresh token.
-    The old refresh token is revoked (single-use rotation).
-
-    NOTE (Azure migration): This endpoint will be replaced by Entra ID's
-    /oauth2/v2.0/token endpoint. The extension calls this URL, so update
-    the extension's API_BASE_URL + path or add a proxy route.
+    The old refresh token is revoked (single-use rotation). New token preserves client_type.
     """
     raw_refresh = (payload.refresh_token or "").strip()
     if not raw_refresh:
         raise HTTPException(status_code=401, detail="Refresh token is required")
 
-    token_payload = decode_refresh_token(raw_refresh)
-    if not token_payload:
-        raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
-
-    user_id_str = token_payload.get("sub")
-    try:
-        user_id = int(user_id_str) if user_id_str is not None else None
-    except (TypeError, ValueError):
-        user_id = None
-    if user_id is None:
-        raise HTTPException(status_code=401, detail="Invalid refresh token payload")
-
-    # Verify user still exists
     with SessionLocal() as db:
+        token_payload = decode_refresh_token(raw_refresh, db)
+        if not token_payload:
+            raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
+
+        user_id_str = token_payload.get("sub")
+        client_type = token_payload.get("client_type", "web")
+        if client_type not in ("web", "extension"):
+            client_type = "web"
+        try:
+            user_id = int(user_id_str) if user_id_str is not None else None
+        except (TypeError, ValueError):
+            user_id = None
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="Invalid refresh token payload")
+
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
-            revoke_refresh_token(raw_refresh)
+            revoke_refresh_token(raw_refresh, db)
             raise HTTPException(status_code=401, detail="User not found")
 
-    # Rotate: revoke old, issue new pair
-    revoke_refresh_token(raw_refresh)
+        revoke_refresh_token(raw_refresh, db)
 
-    logger.info("auth_refresh_success user_id=%s", user_id_str)
-    return AuthTokenResponse(
-        access_token=create_access_token(user_id),
-        refresh_token=create_refresh_token(user_id),
-    )
+        logger.info("auth_refresh_success user_id=%s client_type=%s", user_id_str, client_type)
+        return AuthTokenResponse(
+            access_token=create_access_token(user_id),
+            refresh_token=create_refresh_token(user_id, client_type, db),
+        )
 
 
 @app.post("/auth/logout")
 def auth_logout(payload: RefreshTokenRequest):
     """
-    Revoke the refresh token on explicit logout.
-    Intentionally lenient - returns 200 even if token is already invalid.
+    Revoke the refresh token on explicit logout. Lenient: 200 even if token is invalid.
     """
     raw_refresh = (payload.refresh_token or "").strip()
     if raw_refresh:
-        revoke_refresh_token(raw_refresh)
+        with SessionLocal() as db:
+            revoke_refresh_token(raw_refresh, db)
     logger.info("auth_logout")
     return {"ok": True}
+
+
+# --- Google OAuth -------------------------------------------------------------
+# State store (state -> {client_type, redirect_url, code_verifier, created_at}).
+# In-memory; replace with Redis/DB for multi-worker.
+_OAUTH_STATES: Dict[str, Dict[str, Any]] = {}
+_OAUTH_STATES_LOCK = threading.Lock()
+_OAUTH_STATE_TTL = 600  # 10 minutes
+
+# One-time exchange codes for handing the web session back to the frontend.
+_OAUTH_HANDOFFS: Dict[str, Dict[str, Any]] = {}
+_OAUTH_HANDOFFS_LOCK = threading.Lock()
+_OAUTH_HANDOFF_TTL = 60  # one minute — must be very short
+
+
+def _store_oauth_state(state: str, client_type: str, redirect_url: Optional[str], code_verifier: str) -> None:
+    with _OAUTH_STATES_LOCK:
+        now = time.time()
+        stale = [k for k, v in _OAUTH_STATES.items() if now - v["created_at"] > _OAUTH_STATE_TTL]
+        for k in stale:
+            del _OAUTH_STATES[k]
+        _OAUTH_STATES[state] = {
+            "client_type": client_type,
+            "redirect_url": redirect_url,
+            "code_verifier": code_verifier,
+            "created_at": now,
+        }
+
+
+def _consume_oauth_state(state: str) -> Optional[Dict[str, Any]]:
+    """Returns state record if valid; pops it. Returns None if invalid/expired."""
+    with _OAUTH_STATES_LOCK:
+        record = _OAUTH_STATES.pop(state, None)
+        if not record:
+            return None
+        if time.time() - record["created_at"] > _OAUTH_STATE_TTL:
+            return None
+        return record
+
+
+def _store_oauth_handoff(handoff_id: str, access_token: str, refresh_token: str, email: str) -> None:
+    with _OAUTH_HANDOFFS_LOCK:
+        now = time.time()
+        stale = [k for k, v in _OAUTH_HANDOFFS.items() if now - v["created_at"] > _OAUTH_HANDOFF_TTL]
+        for k in stale:
+            del _OAUTH_HANDOFFS[k]
+        _OAUTH_HANDOFFS[handoff_id] = {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "email": email,
+            "created_at": now,
+        }
+
+
+def _consume_oauth_handoff(handoff_id: str) -> Optional[Dict[str, Any]]:
+    with _OAUTH_HANDOFFS_LOCK:
+        record = _OAUTH_HANDOFFS.pop(handoff_id, None)
+        if not record:
+            return None
+        if time.time() - record["created_at"] > _OAUTH_HANDOFF_TTL:
+            return None
+        return record
+
+
+def _generate_pkce_pair() -> Tuple[str, str]:
+    """Returns (code_verifier, code_challenge) per RFC 7636 (S256)."""
+    verifier = secrets.token_urlsafe(64)[:128]
+    challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode("ascii")).digest()
+    ).rstrip(b"=").decode("ascii")
+    return verifier, challenge
+
+
+class OAuthExchangeRequest(BaseModel):
+    handoff_id: str
+
+
+@app.get("/auth/google/start")
+@limiter.limit("10/minute")
+def auth_google_start(request: Request, client_type: str = "web", redirect_url: Optional[str] = None):
+    """
+    Returns the Google authorize URL (with PKCE) the client should navigate to.
+    For extension client_type, redirect_url is the chromiumapp.org URL where
+    Google's response should ultimately land (after our /auth/google/callback).
+    """
+    if client_type not in ("web", "extension"):
+        client_type = "web"
+    google_client_id = os.getenv("GOOGLE_CLIENT_ID", "")
+    google_redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8000/auth/google/callback")
+    if not google_client_id:
+        raise HTTPException(status_code=500, detail="Google OAuth not configured")
+    if client_type == "extension" and not (redirect_url or "").startswith("https://"):
+        raise HTTPException(status_code=400, detail="Extension flow requires a redirect_url")
+
+    state = secrets.token_urlsafe(32)
+    code_verifier, code_challenge = _generate_pkce_pair()
+    _store_oauth_state(state, client_type, redirect_url, code_verifier)
+
+    params = {
+        "client_id": google_client_id,
+        "redirect_uri": google_redirect_uri,
+        "scope": "openid email profile",
+        "response_type": "code",
+        "state": state,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
+        "access_type": "online",
+        "prompt": "select_account",
+    }
+    authorize_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
+    return {"authorize_url": authorize_url}
+
+
+@app.get("/auth/google/callback")
+async def auth_google_callback(code: str = "", state: str = "", error: str = ""):
+    """
+    Receives Google's redirect. Exchanges code for ID token, looks up/creates user,
+    then either redirects to the frontend (web) with a handoff_id, or to the
+    extension's chromiumapp.org URL with tokens in the URL fragment.
+    """
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
+
+    state_record = _consume_oauth_state(state) if state else None
+    if error or not code or not state_record:
+        return RedirectResponse(f"{frontend_url}/?google_error=cancelled")
+
+    client_type = state_record["client_type"]
+    code_verifier = state_record["code_verifier"]
+    extension_redirect = state_record.get("redirect_url")
+
+    google_client_id = os.getenv("GOOGLE_CLIENT_ID", "")
+    google_client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
+    google_redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8000/auth/google/callback")
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        token_resp = await client.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "code": code,
+                "client_id": google_client_id,
+                "client_secret": google_client_secret,
+                "redirect_uri": google_redirect_uri,
+                "grant_type": "authorization_code",
+                "code_verifier": code_verifier,
+            },
+        )
+        if token_resp.status_code != 200:
+            logger.warning("Google token exchange failed: %s", token_resp.text)
+            return RedirectResponse(f"{frontend_url}/?google_error=token_exchange")
+        token_data = token_resp.json()
+        id_token_str = token_data.get("id_token")
+        if not id_token_str:
+            return RedirectResponse(f"{frontend_url}/?google_error=no_id_token")
+
+        certs_resp = await client.get("https://www.googleapis.com/oauth2/v3/certs")
+        if certs_resp.status_code != 200:
+            return RedirectResponse(f"{frontend_url}/?google_error=jwks_fetch")
+        jwks = certs_resp.json()
+
+    try:
+        unverified_header = jwt.get_unverified_header(id_token_str)
+        kid = unverified_header.get("kid")
+        key_data = next((k for k in jwks.get("keys", []) if k.get("kid") == kid), None)
+        if not key_data:
+            return RedirectResponse(f"{frontend_url}/?google_error=invalid_token")
+
+        # python-jose accepts a JWK dict directly as the key.
+        # access_token is required so jose can validate the at_hash claim Google sets.
+        claims = jwt.decode(
+            id_token_str,
+            key_data,
+            algorithms=["RS256"],
+            audience=google_client_id,
+            issuer=["https://accounts.google.com", "accounts.google.com"],
+            access_token=token_data.get("access_token", ""),
+        )
+    except Exception as exc:
+        logger.exception("Google ID token verification failed: %s", exc)
+        return RedirectResponse(f"{frontend_url}/?google_error=verification_failed")
+
+    google_sub = claims.get("sub")
+    google_email = (claims.get("email") or "").strip().lower()
+    email_verified = bool(claims.get("email_verified", False))
+
+    if not google_sub or not google_email:
+        return RedirectResponse(f"{frontend_url}/?google_error=missing_claims")
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.google_sub == google_sub).first()
+        if not user and email_verified:
+            # Try linking by verified email.
+            user = db.query(User).filter(User.email == google_email).first()
+            if user:
+                user.google_sub = google_sub
+                user.email_verified = True
+                db.commit()
+
+        if not user:
+            user = User(
+                email=google_email,
+                google_sub=google_sub,
+                email_verified=True,
+                password_hash=None,
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            logger.info("auth_google_signup user_id=%d email=%s", user.id, google_email)
+
+        access = create_access_token(user.id)
+        refresh = create_refresh_token(user.id, client_type, db)
+
+    if client_type == "extension":
+        if not extension_redirect:
+            return RedirectResponse(f"{frontend_url}/?google_error=missing_redirect")
+        # Tokens in fragment so they don't hit any server logs.
+        fragment = urlencode({"access": access, "refresh": refresh, "email": google_email})
+        return RedirectResponse(f"{extension_redirect}#{fragment}")
+
+    handoff_id = secrets.token_urlsafe(32)
+    _store_oauth_handoff(handoff_id, access, refresh, google_email)
+    return RedirectResponse(f"{frontend_url}/?google_handoff={handoff_id}")
+
+
+@app.post("/auth/google/exchange", response_model=AuthTokenResponse)
+@limiter.limit("10/minute")
+def auth_google_exchange(request: Request, payload: OAuthExchangeRequest):
+    """Frontend trades a one-time handoff_id for the actual token pair."""
+    record = _consume_oauth_handoff(payload.handoff_id)
+    if not record:
+        raise HTTPException(status_code=400, detail="Invalid or expired handoff")
+    return AuthTokenResponse(
+        access_token=record["access_token"],
+        refresh_token=record["refresh_token"],
+    )
 
 
 @app.delete("/auth/account")
@@ -2829,6 +3466,15 @@ def _ensure_schema_columns():
                 conn.execute(text("ALTER TABLE users ADD COLUMN password_hash VARCHAR"))
             if "users" in table_names and "created_at" not in user_columns:
                 conn.execute(text("ALTER TABLE users ADD COLUMN created_at TIMESTAMP"))
+            if "users" in table_names and "google_sub" not in user_columns:
+                conn.execute(text("ALTER TABLE users ADD COLUMN google_sub VARCHAR(255)"))
+                conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_google_sub ON users (google_sub)"))
+            if "users" in table_names and "email_verified" not in user_columns:
+                conn.execute(text("ALTER TABLE users ADD COLUMN email_verified BOOLEAN DEFAULT FALSE NOT NULL"))
+            if "users" in table_names and "password_changed_at" not in user_columns:
+                conn.execute(text("ALTER TABLE users ADD COLUMN password_changed_at TIMESTAMP"))
+            if "users" in table_names:
+                conn.execute(text("ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL"))
             if "users" in table_names:
                 conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email ON users (email)"))
 
@@ -6947,6 +7593,19 @@ def _queue_price_alert(
 ):
     """Queue a price alert for email delivery."""
     try:
+        try:
+            user_pk = int(user_id)
+        except (TypeError, ValueError):
+            user_pk = None
+        if user_pk is not None:
+            user = db.query(User).filter(User.id == user_pk).first()
+            if not user or not user.email_verified:
+                logger.info(
+                    "price_alert_skipped reason=email_unverified user=%s",
+                    user_id,
+                )
+                return
+
         settings = db.query(EmailAlertSettings).filter(
             EmailAlertSettings.user_id == user_id
         ).first()
@@ -8560,6 +9219,11 @@ def send_alert_digest(user: User = Depends(get_current_user)):
     NOTE (Azure migration): This endpoint becomes an Azure Function timer trigger
     that iterates over all users with unsent alerts. The per-user logic stays the same.
     """
+    if not user.email_verified:
+        raise HTTPException(
+            status_code=403,
+            detail="Verify your email to send price alert digests.",
+        )
     if not EMAIL_ALERTS_ENABLED:
         return {"ok": False, "reason": "Email alerts are disabled server-side."}
 

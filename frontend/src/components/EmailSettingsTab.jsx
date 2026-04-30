@@ -9,7 +9,7 @@ import { useAuth } from '../hooks/useAuth'
 // outer `email` from useEmailSettingsContext (rename was made in Phase 4).
 export default function EmailSettingsTab() {
   const email = useEmailSettingsContext()
-  const { authEmail } = useAuth()
+  const { authEmail, emailVerified, handleResendVerification } = useAuth()
 
   return (
     <section aria-label="Email alert settings">
@@ -19,6 +19,37 @@ export default function EmailSettingsTab() {
           <p className="sectionSub">Get notified when prices drop below your thresholds</p>
         </div>
       </div>
+
+      {emailVerified === false && (
+        <div
+          role="alert"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            padding: '12px 16px',
+            marginBottom: '16px',
+            background: 'var(--warn-bg, #fff7ed)',
+            border: '1px solid var(--warn-border, #fdba74)',
+            borderRadius: '8px',
+            color: 'var(--warn-ink, #9a3412)',
+          }}
+        >
+          <div style={{ fontSize: '0.9em', lineHeight: 1.4 }}>
+            <strong>Email not verified.</strong> Your price alerts won't send until you verify your email.
+          </div>
+          <button
+            type="button"
+            className="primaryBtn"
+            onClick={() => handleResendVerification(authEmail)}
+            disabled={!authEmail}
+            style={{ whiteSpace: 'nowrap', padding: '6px 12px', fontSize: '0.85em' }}
+          >
+            Resend verification email
+          </button>
+        </div>
+      )}
 
       <div className="card" style={{ marginBottom: '16px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>

@@ -9,6 +9,9 @@ const elAuthLoggedOut = document.getElementById("auth-logged-out");
 const elAuthEmail = document.getElementById("auth-email");
 const elAuthPassword = document.getElementById("auth-password");
 const elBtnLogin = document.getElementById("btn-login");
+const elBtnGoogle = document.getElementById("btn-google");
+const elLinkSignup = document.getElementById("link-signup");
+const elLinkForgotPassword = document.getElementById("link-forgot-password");
 const elAuthError = document.getElementById("auth-error");
 const elProfileWrap = document.getElementById("profile-wrap");
 const elBtnProfile = document.getElementById("btn-profile");
@@ -215,11 +218,49 @@ async function extFetchWithRefresh(url, options = {}) {
   return resp;
 }
 
+async function loginWithGoogle() {
+  const redirectUrl = chrome.identity.getRedirectURL();
+  const startUrl =
+    `${API_BASE_URL}/auth/google/start?client_type=extension&redirect_url=` +
+    encodeURIComponent(redirectUrl);
+  const startResp = await fetch(startUrl);
+  if (!startResp.ok) {
+    const data = await startResp.json().catch(() => ({}));
+    throw new Error(data?.detail || "Failed to start Google sign-in");
+  }
+  const { authorize_url: authorizeUrl } = await startResp.json();
+  if (!authorizeUrl) throw new Error("Google sign-in unavailable");
+
+  const responseUrl = await chrome.identity.launchWebAuthFlow({
+    url: authorizeUrl,
+    interactive: true,
+  });
+  if (!responseUrl) throw new Error("Google sign-in canceled");
+
+  const fragment = new URL(responseUrl).hash.slice(1);
+  const params = new URLSearchParams(fragment);
+  const accessToken = params.get("access");
+  const refreshToken = params.get("refresh");
+  const email = params.get("email") || "";
+
+  if (!accessToken || !refreshToken) {
+    throw new Error("Invalid response from Google sign-in");
+  }
+
+  await setStorage({
+    authToken: accessToken,
+    refreshToken: refreshToken,
+    authEmail: email,
+  });
+  chrome.alarms.create("refresh_access_token", { periodInMinutes: 45 });
+  return { access_token: accessToken, email };
+}
+
 async function loginFromPopup(baseUrl, email, password) {
   const res = await fetch(`${baseUrl}/auth/login`, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ username: email, password }),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password, client_type: "extension" }),
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
@@ -785,6 +826,33 @@ elBtnLogin.addEventListener("click", async () => {
   } finally {
     elBtnLogin.disabled = false;
   }
+});
+
+elBtnGoogle.addEventListener("click", async () => {
+  elBtnGoogle.disabled = true;
+  elBtnLogin.disabled = true;
+  elAuthError.textContent = "";
+  try {
+    const result = await loginWithGoogle();
+    updateAuthDisplay(result?.access_token || "token", result?.email || "");
+    await refreshFromBackendAndRender();
+  } catch (err) {
+    elAuthError.textContent = err?.message || "Google sign-in failed";
+    console.warn("[Traker] google_signin_failed error=%s", err?.message || "unknown");
+  } finally {
+    elBtnGoogle.disabled = false;
+    elBtnLogin.disabled = false;
+  }
+});
+
+elLinkSignup.addEventListener("click", (e) => {
+  e.preventDefault();
+  chrome.tabs.create({ url: `${WEB_APP_URL}/?view=register` });
+});
+
+elLinkForgotPassword.addEventListener("click", (e) => {
+  e.preventDefault();
+  chrome.tabs.create({ url: `${WEB_APP_URL}/?view=forgot-password` });
 });
 
 elBtnProfile.addEventListener("click", (e) => {

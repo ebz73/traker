@@ -474,6 +474,76 @@
   font-weight: 600;
 }
 
+.lp-googleBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 0.95rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.lp-googleBtn:hover:not(:disabled) {
+  background: var(--purple-bg);
+  border-color: var(--purple);
+}
+
+.lp-googleBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.lp-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 4px 0;
+  color: var(--muted-light);
+  font-size: 0.8rem;
+}
+
+.lp-divider::before,
+.lp-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+.lp-dividerText {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.lp-forgotLink {
+  justify-self: end;
+  align-self: flex-end;
+  margin-top: 6px;
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--purple);
+  cursor: pointer;
+}
+
+.lp-forgotLink:hover {
+  text-decoration: underline;
+}
+
+.lp-forgotLink:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 [data-theme="dark"] .lp-rightPanel {
   background: radial-gradient(ellipse at 0% 50%, rgba(108, 63, 245, 0.06) 0%, var(--bg) 50%);
 }
