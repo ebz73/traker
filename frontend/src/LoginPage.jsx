@@ -969,7 +969,7 @@ function LoginPage() {
                 {isLogin ? "Don't have an account? " : 'Already have an account? '}
               </span>
               <span className="lp-toggleAction">
-                {isLogin ? 'Sign Up' : 'Log in'}
+                {isLogin ? 'Sign up' : 'Log in'}
               </span>
             </button>
           </form>
