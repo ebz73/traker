@@ -33,7 +33,7 @@ export default function EmailSettingsTab() {
             background: 'var(--warn-bg, #fff7ed)',
             border: '1px solid var(--warn-border, #fdba74)',
             borderRadius: '8px',
-            color: 'var(--warn-ink, #9a3412)',
+            color: 'var(--warn-ink, #7a2410)',
           }}
         >
           <div style={{ fontSize: '0.9em', lineHeight: 1.4 }}>

@@ -63,13 +63,22 @@ export default function HomeTab() {
             value={form.url}
             onChange={(e) => {
               form.setUrl(e.target.value)
-              form.setErrors((prev) => ({ ...prev, url: false }))
+              form.setErrors((prev) => ({ ...prev, url: '' }))
             }}
             onFocus={(e) => e.target.select()}
             placeholder="https://www.walmart.com/..."
             aria-required="true"
-            aria-invalid={form.errors.url || undefined}
+            aria-invalid={form.errors.url ? true : undefined}
+            aria-describedby="product-url-error"
           />
+          <div
+            id="product-url-error"
+            className="lp-error"
+            aria-live="polite"
+            hidden={!form.errors.url}
+          >
+            {form.errors.url}
+          </div>
         </div>
 
         <div className="formSplit">
@@ -84,11 +93,20 @@ export default function HomeTab() {
               value={form.threshold}
               onChange={(e) => {
                 form.setThreshold(e.target.value)
-                form.setErrors((prev) => ({ ...prev, threshold: false }))
+                form.setErrors((prev) => ({ ...prev, threshold: '' }))
               }}
               placeholder="$ 0.00"
-              aria-invalid={form.errors.threshold || undefined}
+              aria-invalid={form.errors.threshold ? true : undefined}
+              aria-describedby="alert-threshold-error"
             />
+            <div
+              id="alert-threshold-error"
+              className="lp-error"
+              aria-live="polite"
+              hidden={!form.errors.threshold}
+            >
+              {form.errors.threshold}
+            </div>
           </div>
 
           <div className="formRow">

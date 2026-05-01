@@ -15,7 +15,7 @@
   --ink: #22314a;
   --ink-secondary: #495d7a;
   --muted: #5e708d;
-  --muted-light: #667897;
+  --muted-light: #4a5870;
   --muted-lighter: #888;
   --muted-lightest: #aaa;
 
@@ -299,7 +299,8 @@ body {
 }
 
 .pageBg {
-  min-height: 100vh;
+  min-height: 100vh; /* fallback for older browsers */
+  min-height: 100dvh;
   padding-top: env(safe-area-inset-top);
   position: relative;
 }
@@ -579,6 +580,15 @@ body {
   width: 100%;
   background: var(--bg-input);
   color: var(--ink);
+}
+
+.lp-error {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--toast-error-border);
+  background: var(--toast-error-bg);
+  color: var(--toast-error-text);
+  font-size: 0.93rem;
 }
 
 .primaryBtn {
@@ -1039,12 +1049,40 @@ body {
 
   .chartRevealGroup {
     clip-path: none;
-    animation: none;
+    animation: none !important;
   }
 
   .lastPriceDot {
     opacity: 1;
-    animation: none;
+    animation: none !important;
+  }
+
+  .chartSkeleton {
+    animation: none !important;
+  }
+
+  .profileDropdown {
+    animation: none !important;
+  }
+
+  .lp-confetti-piece,
+  .toast-confetti-piece {
+    animation: none !important;
+    opacity: 0 !important;
+  }
+
+  .lp-characterGroup.lp-emotionSuccess,
+  .lp-characterGroup.lp-emotionError,
+  .toast-character-motion {
+    animation: none !important;
+  }
+
+  .loginPage {
+    transition: none !important;
+  }
+
+  .toast-outer {
+    transition: none !important;
   }
 }
 

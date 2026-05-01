@@ -14,24 +14,26 @@ export function useAddProductForm() {
   const [url, setUrl] = useState('')
   const [threshold, setThreshold] = useState('')
   const [frequency, setFrequency] = useState(DEFAULT_FREQUENCY)
-  const [errors, setErrors] = useState({ url: false, threshold: false })
+  const [errors, setErrors] = useState({ url: '', threshold: '' })
 
   const validate = useCallback(() => {
     const trimmedUrl = url.trim()
     if (!trimmedUrl) {
-      setErrors((prev) => ({ ...prev, url: true }))
-      showToast('Please enter a product URL.', 'error')
+      const msg = 'Please enter a product URL.'
+      setErrors((prev) => ({ ...prev, url: msg }))
+      showToast(msg, 'error')
       return null
     }
-    setErrors((prev) => ({ ...prev, url: false }))
+    setErrors((prev) => ({ ...prev, url: '' }))
 
     const parsedThreshold = threshold === '' ? '' : Number(threshold)
     if (parsedThreshold !== '' && Number.isNaN(parsedThreshold)) {
-      setErrors((prev) => ({ ...prev, threshold: true }))
-      showToast('Threshold must be a valid number.', 'error')
+      const msg = 'Threshold must be a valid number.'
+      setErrors((prev) => ({ ...prev, threshold: msg }))
+      showToast(msg, 'error')
       return null
     }
-    setErrors((prev) => ({ ...prev, threshold: false }))
+    setErrors((prev) => ({ ...prev, threshold: '' }))
 
     return { url: trimmedUrl, threshold: parsedThreshold, frequency }
   }, [frequency, showToast, threshold, url])
