@@ -176,7 +176,7 @@ export default function EmailSettingsTab() {
         <ol style={{ paddingLeft: '20px', color: 'var(--muted)', fontSize: '0.9em', lineHeight: '1.8' }}>
           <li>Set a price threshold on any tracked product</li>
           <li>When a price check detects a drop below your threshold, an alert is queued</li>
-          <li>Alerts are collected and sent as a digest email to all your recipients</li>
+          <li>Queued alerts are sent as a digest email every few hours, or click <strong>Send Now</strong> to deliver immediately</li>
         </ol>
       </div>
     </section>

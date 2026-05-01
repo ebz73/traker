@@ -61,6 +61,14 @@ try:
 except ImportError:
     _RESEND_AVAILABLE = False
 
+# APScheduler for the price-alert digest scheduler.
+try:
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from apscheduler.triggers.interval import IntervalTrigger
+    _APSCHEDULER_AVAILABLE = True
+except ImportError:
+    _APSCHEDULER_AVAILABLE = False
+
 from bs4 import BeautifulSoup
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -693,7 +701,7 @@ RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
 EMAIL_FROM = os.getenv("EMAIL_FROM", "onboarding@resend.dev")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 EMAIL_ALERTS_ENABLED = os.getenv("EMAIL_ALERTS_ENABLED", "true").lower() in ("true", "1", "yes")
-ALERT_DIGEST_INTERVAL_HOURS = int(os.getenv("ALERT_DIGEST_INTERVAL_HOURS", "6"))
+ALERT_DIGEST_INTERVAL_HOURS = float(os.getenv("ALERT_DIGEST_INTERVAL_HOURS", "6"))
 
 if _RESEND_AVAILABLE and RESEND_API_KEY:
     resend.api_key = RESEND_API_KEY
@@ -1625,6 +1633,35 @@ async def lifespan(app: FastAPI):
     )
     app.state.storage_cleanup_thread.start()
 
+    # Background digest scheduler. Runs in this process — single App Service
+    # instance only. If you scale out, wire this through an external timer
+    # (Azure Function / cron) hitting a service-auth endpoint instead, otherwise
+    # users will get duplicate digests.
+    app.state.digest_scheduler = None
+    if not _APSCHEDULER_AVAILABLE:
+        logger.warning("digest_scheduler_unavailable reason=apscheduler_not_installed")
+    elif ALERT_DIGEST_INTERVAL_HOURS <= 0:
+        logger.info("digest_scheduler_disabled reason=interval_zero_or_negative")
+    else:
+        try:
+            scheduler = BackgroundScheduler(daemon=True)
+            scheduler.add_job(
+                _flush_all_unsent_digests,
+                IntervalTrigger(hours=ALERT_DIGEST_INTERVAL_HOURS),
+                id="digest_flush",
+                max_instances=1,       # don't overlap if a run takes longer than the interval
+                coalesce=True,         # if runs were missed during downtime, only catch up once
+                misfire_grace_time=300,
+            )
+            scheduler.start()
+            app.state.digest_scheduler = scheduler
+            logger.info(
+                "digest_scheduler_started interval_hours=%s",
+                ALERT_DIGEST_INTERVAL_HOURS,
+            )
+        except Exception as exc:
+            logger.exception("digest_scheduler_start_failed error=%s", exc)
+
     try:
         yield
     finally:
@@ -1633,6 +1670,13 @@ async def lifespan(app: FastAPI):
         with _ACI_IDLE_TIMER_LOCK:
             if _ACI_IDLE_TIMER is not None:
                 _ACI_IDLE_TIMER.cancel()
+        scheduler = getattr(app.state, "digest_scheduler", None)
+        if scheduler is not None:
+            try:
+                scheduler.shutdown(wait=False)
+                logger.info("digest_scheduler_stopped")
+            except Exception as exc:
+                logger.warning("digest_scheduler_stop_failed error=%s", exc)
 
 
 limiter = Limiter(key_func=get_remote_address, default_limits=["100/hour"])
@@ -7720,6 +7764,147 @@ def _build_alert_digest_html(alerts: List[PriceAlert], user_email: str) -> str:
     """
 
 
+def _send_digest_for_user(user: "User", db) -> dict:
+    """
+    Send a digest of unsent price alerts to one user.
+
+    Returns {"ok": bool, "sent": int, "reason": str | None, "recipients": list | None}.
+    Skips (returns ok=False) if the user is unverified, has alerts disabled, or
+    digest delivery fails. Returns ok=True with sent=0 when there are no unsent
+    alerts. Marks alerts as sent=True only after a successful Resend send.
+
+    Caller owns the db session lifecycle.
+    """
+    if not user.email_verified:
+        return {"ok": False, "sent": 0, "reason": "email_not_verified"}
+
+    user_id = str(user.id)
+
+    settings = db.query(EmailAlertSettings).filter(
+        EmailAlertSettings.user_id == user_id
+    ).first()
+    if not settings or not settings.enabled:
+        return {
+            "ok": False,
+            "sent": 0,
+            "reason": "alerts_disabled_for_user",
+            "message": "Email alerts not enabled for this user.",
+        }
+
+    unsent = (
+        db.query(PriceAlert)
+        .filter(PriceAlert.user_id == user_id, PriceAlert.sent.is_(False))
+        .order_by(PriceAlert.created_at.desc())
+        .all()
+    )
+    if not unsent:
+        return {
+            "ok": True,
+            "sent": 0,
+            "reason": "no_unsent_alerts",
+            "message": "No pending alerts.",
+        }
+
+    recipients = [user.email]
+    if settings.recipients:
+        extras = [r.strip() for r in settings.recipients.split(",") if r.strip()]
+        recipients.extend(extras)
+    recipients = [email for email in dict.fromkeys(recipients) if email]
+
+    subject = f"Traker: {len(unsent)} price drop{'s' if len(unsent) != 1 else ''} detected!"
+    html_body = _build_alert_digest_html(unsent, user.email)
+    sent_ok = _send_alert_email(recipients, subject, html_body)
+
+    if sent_ok:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        for alert in unsent:
+            alert.sent = True
+            alert.sent_at = now
+        db.commit()
+        logger.info(
+            "alert_digest_sent user=%s count=%d recipients=%s",
+            user_id,
+            len(unsent),
+            recipients,
+        )
+        return {"ok": True, "sent": len(unsent), "recipients": recipients}
+    return {"ok": False, "sent": 0, "reason": "Email delivery failed. Check SMTP configuration."}
+
+
+def _flush_all_unsent_digests():
+    """
+    Background scheduler entry point.
+
+    Iterates all users with unsent alerts, sends each their digest via
+    _send_digest_for_user. Per-user errors are logged but do not block
+    delivery to other users. Opens its own SessionLocal() because it runs in
+    a background thread, not a FastAPI request context.
+    """
+    if not EMAIL_ALERTS_ENABLED:
+        logger.info("digest_scheduler_skip reason=email_alerts_disabled")
+        return
+
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(PriceAlert.user_id)
+            .filter(PriceAlert.sent.is_(False))
+            .distinct()
+            .all()
+        )
+        user_ids = [row[0] for row in rows]
+        logger.info("digest_scheduler_start users=%d", len(user_ids))
+
+        sent_count = 0
+        skip_count = 0
+        error_count = 0
+
+        for user_id in user_ids:
+            try:
+                try:
+                    user_pk = int(user_id)
+                except (TypeError, ValueError):
+                    logger.warning("digest_scheduler_user_invalid_id user_id=%s", user_id)
+                    skip_count += 1
+                    continue
+
+                user = db.query(User).filter(User.id == user_pk).first()
+                if not user:
+                    logger.warning("digest_scheduler_user_missing user_id=%s", user_id)
+                    skip_count += 1
+                    continue
+
+                result = _send_digest_for_user(user, db)
+                if result.get("ok") and result.get("sent", 0) > 0:
+                    sent_count += 1
+                else:
+                    skip_count += 1
+                    logger.info(
+                        "digest_scheduler_skip user_id=%s reason=%s",
+                        user_id,
+                        result.get("reason", "unknown"),
+                    )
+            except Exception as exc:
+                error_count += 1
+                logger.error("digest_scheduler_user_error user_id=%s error=%s", user_id, exc)
+                # Reset the session so a failed commit doesn't poison the next iteration.
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+
+        logger.info(
+            "digest_scheduler_done sent=%d skipped=%d errors=%d",
+            sent_count,
+            skip_count,
+            error_count,
+        )
+    except Exception as exc:
+        logger.error("digest_scheduler_fatal error=%s", exc)
+    finally:
+        db.close()
+
+
 def _extension_available(user_id: Optional[str] = None, ttl_seconds: float = EXTENSION_HEARTBEAT_TTL_SECONDS) -> bool:
     """Check if a specific user's extension is online, or any extension if user_id is None."""
     now = time.time()
@@ -9221,63 +9406,28 @@ def update_email_settings(
 @app.post("/email-alerts/send-digest")
 def send_alert_digest(user: User = Depends(get_current_user)):
     """
-    Send unsent price alerts as a digest email to the user.
-    NOTE (Azure migration): This endpoint becomes an Azure Function timer trigger
-    that iterates over all users with unsent alerts. The per-user logic stays the same.
+    Send unsent price alerts as a digest email to the calling user.
+
+    Thin wrapper around _send_digest_for_user, which is also the per-user entry
+    point used by the background scheduler (_flush_all_unsent_digests). Translates
+    skip-reasons that warrant non-200 status codes (e.g. email_not_verified → 403)
+    into HTTPExceptions; the scheduler path treats those same reasons as silent skips.
     """
-    if not user.email_verified:
+    if not EMAIL_ALERTS_ENABLED:
+        return {"ok": False, "sent": 0, "reason": "Email alerts are disabled server-side."}
+    try:
+        with SessionLocal() as db:
+            result = _send_digest_for_user(user, db)
+    except SQLAlchemyError as exc:
+        logger.exception("Failed to send alert digest: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    if result.get("reason") == "email_not_verified":
         raise HTTPException(
             status_code=403,
             detail="Verify your email to send price alert digests.",
         )
-    if not EMAIL_ALERTS_ENABLED:
-        return {"ok": False, "reason": "Email alerts are disabled server-side."}
-
-    caller_user_id = str(user.id)
-    try:
-        with SessionLocal() as db:
-            settings = db.query(EmailAlertSettings).filter(
-                EmailAlertSettings.user_id == caller_user_id
-            ).first()
-            if not settings or not settings.enabled:
-                return {"ok": False, "reason": "Email alerts not enabled for this user."}
-
-            unsent = (
-                db.query(PriceAlert)
-                .filter(PriceAlert.user_id == caller_user_id, PriceAlert.sent.is_(False))
-                .order_by(PriceAlert.created_at.desc())
-                .all()
-            )
-            if not unsent:
-                return {"ok": True, "sent": 0, "message": "No pending alerts."}
-
-            recipients = [user.email]
-            if settings.recipients:
-                extras = [r.strip() for r in settings.recipients.split(",") if r.strip()]
-                recipients.extend(extras)
-            recipients = [email for email in dict.fromkeys(recipients) if email]
-
-            subject = f"Traker: {len(unsent)} price drop{'s' if len(unsent) != 1 else ''} detected!"
-            html_body = _build_alert_digest_html(unsent, user.email)
-            sent_ok = _send_alert_email(recipients, subject, html_body)
-
-            if sent_ok:
-                now = datetime.datetime.now(datetime.timezone.utc)
-                for alert in unsent:
-                    alert.sent = True
-                    alert.sent_at = now
-                db.commit()
-                logger.info(
-                    "alert_digest_sent user=%s count=%d recipients=%s",
-                    caller_user_id,
-                    len(unsent),
-                    recipients,
-                )
-                return {"ok": True, "sent": len(unsent), "recipients": recipients}
-            return {"ok": False, "reason": "Email delivery failed. Check SMTP configuration."}
-    except SQLAlchemyError as exc:
-        logger.exception("Failed to send alert digest: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+    return result
 
 
 @app.get("/email-alerts/pending")
