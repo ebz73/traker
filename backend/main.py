@@ -7679,6 +7679,12 @@ def _build_alert_digest_html(alerts: List[PriceAlert], user_email: str) -> str:
             f'</tr>'
         )
     table_rows = "\n".join(rows)
+    if len(alerts) == 1:
+        cta_url = alerts[0].url
+        cta_text = "View Product"
+    else:
+        cta_url = "https://traker.azurewebsites.net/?tab=droplist"
+        cta_text = "View Droplist"
     return f"""
     <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:600px;margin:0 auto;">
         <div style="background:linear-gradient(135deg,#7056f6,#5636ef);padding:20px;border-radius:12px 12px 0 0;">
@@ -7700,10 +7706,10 @@ def _build_alert_digest_html(alerts: List[PriceAlert], user_email: str) -> str:
                     {table_rows}
                 </tbody>
             </table>
-            <a href="https://traker.azurewebsites.net/?tab=droplist"
+            <a href="{cta_url}"
                style="display:inline-block;background:#5636ef;color:#fff;padding:10px 24px;
                       border-radius:8px;text-decoration:none;font-weight:600;margin-top:8px;">
-                View Droplist
+                {cta_text}
             </a>
             <p style="color:#999;font-size:12px;margin-top:20px;">
                 You're receiving this because you enabled email alerts on Traker.
