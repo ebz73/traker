@@ -202,4 +202,9 @@
   } else {
     bridgeDisabled = true;
   }
+
+  // Announce readiness so pages that mounted before this content script
+  // injected can detect us without waiting for their next PT_PING_EXT retry.
+  // No-ops cleanly if bridgeDisabled (postToPage early-returns).
+  postToPage({ type: "PT_EXT_READY" });
 })();
