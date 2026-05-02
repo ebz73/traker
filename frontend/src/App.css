@@ -2,6 +2,7 @@
   /* Backgrounds */
   --bg: #dbe3f1;
   --bg-card: #ffffff;
+  --bg-panel: #eef2fa;
   --bg-input: #ffffff;
   --bg-minibox: #f8fbff;
   --bg-chart: #fbfcff;
@@ -148,6 +149,7 @@
   /* Backgrounds */
   --bg: #0f1117;
   --bg-card: #11131a;
+  --bg-panel: #11131a;
   --bg-input: #161922;
   --bg-minibox: #13151e;
   --bg-chart: #11131a;;

@@ -319,7 +319,7 @@
   align-items: center;
   justify-content: center;
   padding: 32px;
-  background: var(--purple-bg);
+  background: var(--bg-panel);
 }
 
 .lp-formWrap {
@@ -536,7 +536,7 @@
 }
 
 [data-theme="dark"] .lp-rightPanel {
-  background: radial-gradient(ellipse at 0% 50%, rgba(108, 63, 245, 0.06) 0%, var(--bg) 50%);
+  background: radial-gradient(ellipse at 0% 50%, rgba(108, 63, 245, 0.06) 0%, var(--bg-panel) 50%);
 }
 
 @media (hover: hover) {
@@ -596,11 +596,11 @@
     padding-bottom: calc(24px + env(safe-area-inset-bottom));
     padding-left: 24px;
     padding-right: 24px;
-    background: var(--purple-bg);
+    background: var(--bg-panel);
   }
 
   [data-theme="dark"] .lp-rightPanel {
-    background: radial-gradient(ellipse at center, var(--bg) 40%, rgba(108, 63, 245, 0.06) 100%);
+    background: radial-gradient(ellipse at center, var(--bg-panel) 40%, rgba(108, 63, 245, 0.06) 100%);
   }
 
   .lp-mobileBrand {
