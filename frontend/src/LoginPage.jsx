@@ -208,6 +208,7 @@ function LoginPage() {
   const purpleHiding = loginPassword.length > 0 && !showPassword
   const engagedExpression = purpleHiding || isTyping
   const isLogin = authView === 'login'
+  const celebrating = authSuccess || loginExiting
 
   useEffect(() => {
     const onMouseMove = (event) => {
@@ -885,7 +886,7 @@ function LoginPage() {
                   autoComplete={isLogin ? 'current-password' : 'new-password'}
                   value={loginPassword}
                   onChange={handlePasswordChange}
-                  placeholder="Password"
+                  placeholder={isLogin ? 'Password' : 'At least 8 characters with letters and digits'}
                 />
                 <button
                   className="lp-passwordToggle"
@@ -942,12 +943,18 @@ function LoginPage() {
 
             {authError && <div className="lp-error">{authError}</div>}
 
-            <button className="lp-submitBtn" type="submit" disabled={authLoading || authSuccess || loginExiting || !loginEmail || !loginPassword}>
-              {authSuccess || loginExiting
-                ? "✓"
-                : authLoading
-                  ? (isLogin ? "Logging in…" : "Creating account…")
-                  : (isLogin ? "Log in" : "Register")}
+            <button
+              className="lp-submitBtn"
+              type="submit"
+              disabled={authLoading || celebrating || !loginEmail || !loginPassword}
+              style={{
+                opacity: celebrating ? 0.4 : 1,
+                transition: 'opacity 200ms ease',
+              }}
+            >
+              {authLoading || celebrating
+                ? (isLogin ? 'Logging in…' : 'Creating account…')
+                : (isLogin ? 'Log in' : 'Register')}
             </button>
 
             <div className="lp-divider">
@@ -958,7 +965,7 @@ function LoginPage() {
               className="lp-googleBtn"
               type="button"
               onClick={signInWithGoogle}
-              disabled={authLoading || authSuccess || loginExiting}
+              disabled={authLoading || celebrating}
             >
               <GoogleIcon />
               <span>Continue with Google</span>
