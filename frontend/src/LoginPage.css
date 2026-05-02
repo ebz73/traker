@@ -413,6 +413,103 @@
   background: var(--bg-hover);
 }
 
+.lp-password-requirements {
+  list-style: none;
+  padding: 0;
+  margin: 10px 0 0;
+  font-size: 0.78rem;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lp-password-requirements.hidden {
+  display: none;
+}
+
+.lp-password-requirements li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  transition: color 250ms ease;
+}
+
+.lp-password-requirements li.met {
+  color: var(--success, #2e7d32);
+}
+
+.lp-req-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.lp-password-requirements li.met .lp-req-icon {
+  animation: lp-check-pop 250ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes lp-check-pop {
+  0% { transform: scale(0.7); }
+  60% { transform: scale(1.2); }
+  100% { transform: scale(1); }
+}
+
+.lp-password-requirements-wrap {
+  position: relative;
+}
+
+.lp-sparkle-layer {
+  position: absolute;
+  top: -8px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.lp-sparkle {
+  position: absolute;
+  font-size: 14px;
+  opacity: 0;
+  animation: lp-sparkle-burst 700ms cubic-bezier(0.4, 0, 0.6, 1) forwards;
+  will-change: transform, opacity;
+}
+
+.lp-sparkle-0 { color: var(--art-purple); top: 0%;   left: 8%;  --tx: -20px; --ty: -25px; animation-delay: 0ms; }
+.lp-sparkle-1 { color: var(--art-orange); top: 30%;  left: 35%; --tx: 15px;  --ty: -30px; animation-delay: 60ms; }
+.lp-sparkle-2 { color: var(--art-yellow); top: 50%;  left: 60%; --tx: 25px;  --ty: -20px; animation-delay: 30ms; }
+.lp-sparkle-3 { color: var(--success, #2e7d32); top: 10%;  left: 80%; --tx: 30px;  --ty: -15px; animation-delay: 90ms; }
+.lp-sparkle-4 { color: var(--art-purple); top: 70%;  left: 20%; --tx: -25px; --ty: -10px; animation-delay: 120ms; }
+.lp-sparkle-5 { color: var(--art-orange); top: 40%;  left: 90%; --tx: 35px;  --ty: -25px; animation-delay: 150ms; }
+.lp-sparkle-6 { color: var(--art-yellow); top: 5%;   left: 50%; --tx: -10px; --ty: -28px; animation-delay: 45ms; }
+.lp-sparkle-7 { color: var(--success, #2e7d32); top: 60%; left: 5%; --tx: -30px; --ty: -18px; animation-delay: 105ms; }
+.lp-sparkle-8 { color: var(--art-purple); top: 25%;  left: 50%; --tx: 20px;  --ty: -22px; animation-delay: 75ms; }
+.lp-sparkle-9 { color: var(--art-orange); top: 80%;  left: 70%; --tx: 22px;  --ty: -15px; animation-delay: 135ms; }
+
+@keyframes lp-sparkle-burst {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0) scale(0.4) rotate(0deg);
+  }
+  30% {
+    opacity: 1;
+    transform: translate(calc(var(--tx) * 0.5), calc(var(--ty) * 0.5)) scale(1.1) rotate(45deg);
+  }
+  60% {
+    opacity: 1;
+    transform: translate(var(--tx), var(--ty)) scale(1) rotate(90deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(calc(var(--tx) * 1.2), calc(var(--ty) * 1.5)) scale(0.6) rotate(120deg);
+  }
+}
+
 .lp-submitBtn {
   width: 100%;
   height: 48px;

@@ -1086,6 +1086,18 @@ body {
   .toast-outer {
     transition: none !important;
   }
+
+  .lp-password-requirements li,
+  .lp-req-icon,
+  .lp-password-requirements li.met .lp-req-icon {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .lp-sparkle {
+    animation: none !important;
+    opacity: 0 !important;
+  }
 }
 
 .uiChangedBanner {

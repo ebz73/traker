@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Check, Circle } from 'lucide-react'
 import './LoginPage.css'
 import { CHARACTER_COLORS } from './constants'
 import { useAuth } from './hooks/useAuth'
@@ -141,6 +142,65 @@ function Confetti({ active }) {
   return <div className="lp-confetti-container">{pieces}</div>
 }
 
+function PasswordRequirements({ password, visible }) {
+  const hasMinLength = password.length >= 8
+  const hasLetter = /[a-zA-Z]/.test(password)
+  const hasDigit = /[0-9]/.test(password)
+  const allMet = hasMinLength && hasLetter && hasDigit
+
+  const [prevAllMet, setPrevAllMet] = useState(false)
+  const [sparkling, setSparkling] = useState(false)
+
+  if (allMet !== prevAllMet) {
+    setPrevAllMet(allMet)
+    if (allMet) {
+      setSparkling(true)
+    }
+  }
+
+  useEffect(() => {
+    if (!sparkling) return
+    const timer = setTimeout(() => setSparkling(false), 700)
+    return () => clearTimeout(timer)
+  }, [sparkling])
+
+  return (
+    <div className="lp-password-requirements-wrap" data-sparkling={sparkling || undefined}>
+      <ul
+        className={`lp-password-requirements ${visible ? 'visible' : 'hidden'}`}
+        aria-label="Password requirements"
+        aria-live="polite"
+      >
+        <li className={hasMinLength ? 'met' : 'unmet'}>
+          <span className="lp-req-icon" aria-hidden="true">
+            {hasMinLength ? <Check size={12} strokeWidth={3} /> : <Circle size={12} strokeWidth={2} />}
+          </span>
+          At least 8 characters
+        </li>
+        <li className={hasLetter ? 'met' : 'unmet'}>
+          <span className="lp-req-icon" aria-hidden="true">
+            {hasLetter ? <Check size={12} strokeWidth={3} /> : <Circle size={12} strokeWidth={2} />}
+          </span>
+          Contains a letter
+        </li>
+        <li className={hasDigit ? 'met' : 'unmet'}>
+          <span className="lp-req-icon" aria-hidden="true">
+            {hasDigit ? <Check size={12} strokeWidth={3} /> : <Circle size={12} strokeWidth={2} />}
+          </span>
+          Contains a digit
+        </li>
+      </ul>
+      {sparkling && (
+        <div className="lp-sparkle-layer" aria-hidden="true">
+          {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => (
+            <span key={i} className={`lp-sparkle lp-sparkle-${i}`}>✦</span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function GoogleIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
@@ -178,6 +238,8 @@ function LoginPage() {
     signInWithGoogle,
   } = useAuth()
   const [showPassword, setShowPassword] = useState(false)
+  const [signupPasswordFocused, setSignupPasswordFocused] = useState(false)
+  const [resetPasswordFocused, setResetPasswordFocused] = useState(false)
   const [isTyping, setIsTyping] = useState(false)
   const [purplePeek, setPurplePeek] = useState(false)
   const [emotion, setEmotion] = useState('idle')
@@ -807,6 +869,8 @@ function LoginPage() {
                       autoComplete="new-password"
                       value={loginPassword}
                       onChange={handlePasswordChange}
+                      onFocus={() => setResetPasswordFocused(true)}
+                      onBlur={() => setResetPasswordFocused(false)}
                       placeholder="At least 8 characters with letters and digits"
                     />
                     <button
@@ -847,6 +911,10 @@ function LoginPage() {
                       )}
                     </button>
                   </div>
+                  <PasswordRequirements
+                    password={loginPassword}
+                    visible={resetPasswordFocused || loginPassword.length > 0}
+                  />
                 </div>
                 {authError && <div className="lp-error">{authError}</div>}
                 <button
@@ -886,6 +954,8 @@ function LoginPage() {
                   autoComplete={isLogin ? 'current-password' : 'new-password'}
                   value={loginPassword}
                   onChange={handlePasswordChange}
+                  onFocus={isLogin ? undefined : () => setSignupPasswordFocused(true)}
+                  onBlur={isLogin ? undefined : () => setSignupPasswordFocused(false)}
                   placeholder={isLogin ? 'Password' : 'At least 8 characters with letters and digits'}
                 />
                 <button
@@ -926,6 +996,12 @@ function LoginPage() {
                   )}
                 </button>
               </div>
+              {!isLogin && (
+                <PasswordRequirements
+                  password={loginPassword}
+                  visible={signupPasswordFocused || loginPassword.length > 0}
+                />
+              )}
               {isLogin && (
                 <button
                   className="lp-forgotLink"
