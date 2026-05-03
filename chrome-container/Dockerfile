@@ -1,3 +1,7 @@
+# Source for Chrome 146 binary (Chrome 147 has a CDP regression that breaks
+# patchright: Network.setCacheDisabled fails with "session closed").
+FROM pricetracker-chrome-aci:test AS chrome-source
+
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -50,12 +54,10 @@ RUN apt-get update && apt-get install -y \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# Install real Google Chrome stable
-RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
- && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
- && apt-get update \
- && apt-get install -y google-chrome-stable \
- && apt-get clean && rm -rf /var/lib/apt/lists/*
+# Pin Chrome to 146.0.7680.164 by copying from a known-good image.
+COPY --from=chrome-source /opt/google/chrome /opt/google/chrome
+RUN ln -sf /opt/google/chrome/google-chrome /usr/bin/google-chrome-stable \
+ && ln -sf /usr/bin/google-chrome-stable /usr/bin/google-chrome
 
 # Create non-root user
 RUN useradd -m -s /bin/bash chrome
@@ -67,8 +69,6 @@ RUN mkdir -p /home/chrome/chrome-profile \
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-EXPOSE 9223
-
-USER chrome
+EXPOSE 3000 6080
 
 ENTRYPOINT ["/entrypoint.sh"]

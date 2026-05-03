@@ -65,6 +65,7 @@ class ScrapeRequest(BaseModel):
     url: str
     proxy: Optional[str] = None  # http://user:pass@host:port
     timeout_ms: int = 90000
+    wait_for_selector: Optional[str] = None  # CSS selector(s) — wait until a match contains price text
 
 
 class ScrapeResponse(BaseModel):
@@ -83,7 +84,7 @@ async def scrape_page(req: ScrapeRequest, x_api_key: str = Header(default="")):
         raise HTTPException(status_code=401, detail="Unauthorized")
     try:
         result = await asyncio.get_event_loop().run_in_executor(
-            None, _sync_scrape, req.url, req.proxy, req.timeout_ms
+            None, _sync_scrape, req.url, req.proxy, req.timeout_ms, req.wait_for_selector,
         )
         return result
     except Exception as exc:
@@ -91,7 +92,8 @@ async def scrape_page(req: ScrapeRequest, x_api_key: str = Header(default="")):
         raise HTTPException(status_code=500, detail=_sanitize_error(str(exc)))
 
 
-def _sync_scrape(url: str, proxy: Optional[str], timeout_ms: int) -> dict:
+def _sync_scrape(url: str, proxy: Optional[str], timeout_ms: int,
+                 wait_for_selector: Optional[str] = None) -> dict:
     """Synchronous Camoufox scrape using all available stealth features."""
     from camoufox.sync_api import Camoufox
 
@@ -225,6 +227,26 @@ def _sync_scrape(url: str, proxy: Optional[str], timeout_ms: int) -> dict:
                 )
             except Exception:
                 pass
+
+            # Site-specific wait: ensure a matched element actually contains a price,
+            # not just exists (Walmart's [itemprop="price"] is an empty placeholder
+            # until JS hydrates). Falls through on timeout — extraction runs anyway.
+            if wait_for_selector:
+                try:
+                    page.wait_for_function(
+                        """(sel) => {
+                            const els = document.querySelectorAll(sel);
+                            for (const el of els) {
+                                const txt = (el.innerText || el.textContent || '').trim();
+                                if (/\\d[\\d.,]*[.,]\\d{2}/.test(txt)) return true;
+                            }
+                            return false;
+                        }""",
+                        arg=wait_for_selector,
+                        timeout=15000,
+                    )
+                except Exception:
+                    logger.debug("wait_for_selector content timeout: %s", wait_for_selector[:80])
 
             # Human reading delay (user scans the price area)
             time.sleep(random.uniform(0.8, 2.0))

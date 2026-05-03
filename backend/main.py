@@ -244,17 +244,15 @@ CDP_PROXY_PRIMARY_URL = os.getenv("CDP_PROXY_PRIMARY_URL", "")  # DataImpulse
 CDP_PROXY_FALLBACK_URL = os.getenv("CDP_PROXY_FALLBACK_URL", "")  # IPRoyal
 # ISP proxies (Decodo — static residential IPs from real ISPs, highest trust)
 # These bypass CDN-level blocking on hard sites like Walmart, H&M
-# Split across browser engines: #1 for Chrome, #2 for Camoufox, #3 shared fallback
+# Split across browser engines: #1 for Chrome, #2 for Camoufox. Decodo handles per-connection rotation server-side.
 # Format: http://user-country-us:password@isp.decodo.com:port
 CDP_PROXY_ISP_URL = os.getenv("CDP_PROXY_ISP_URL", "")  # Decodo ISP #1 — Chrome CDP
 CDP_PROXY_ISP_URL_2 = os.getenv("CDP_PROXY_ISP_URL_2", "")  # Decodo ISP #2 — Camoufox
-CDP_PROXY_ISP_URL_3 = os.getenv("CDP_PROXY_ISP_URL_3", "")  # Decodo ISP #3 — shared fallback
 CDP_PROXY_ENABLED = (
     bool(CDP_PROXY_PRIMARY_URL.strip())
     or bool(CDP_PROXY_FALLBACK_URL.strip())
     or bool(CDP_PROXY_ISP_URL.strip())
     or bool(CDP_PROXY_ISP_URL_2.strip())
-    or bool(CDP_PROXY_ISP_URL_3.strip())
 )
 # Optional: override Playwright user agent for CDP (must match remote Chrome major version or omit).
 CDP_USER_AGENT = os.getenv("CDP_USER_AGENT", "").strip()
@@ -4851,14 +4849,12 @@ def _make_sticky_proxy_url_for_broker(proxy_url: Optional[str]) -> Optional[str]
 def _get_cdp_proxy_list() -> List[str]:
     """
     Proxy list for Chrome CDP (Tier 4b — fallback).
-    Order: ISP #1 -> ISP #3 -> ISP #2 -> DataImpulse -> IPRoyal.
+    Order: ISP #1 -> ISP #2 -> DataImpulse -> IPRoyal.
     ISP proxies first (cleanest IPs), residential as fallback.
     """
     proxies: List[str] = []
     if CDP_PROXY_ISP_URL and CDP_PROXY_ISP_URL.strip():
         proxies.append(CDP_PROXY_ISP_URL.strip())
-    if CDP_PROXY_ISP_URL_3 and CDP_PROXY_ISP_URL_3.strip():
-        proxies.append(CDP_PROXY_ISP_URL_3.strip())
     if CDP_PROXY_ISP_URL_2 and CDP_PROXY_ISP_URL_2.strip():
         proxies.append(CDP_PROXY_ISP_URL_2.strip())
     if CDP_PROXY_PRIMARY_URL and CDP_PROXY_PRIMARY_URL.strip():
@@ -4871,14 +4867,12 @@ def _get_cdp_proxy_list() -> List[str]:
 def _get_camoufox_proxy_list() -> List[str]:
     """
     Proxy list for Camoufox (Tier 4a — tried first).
-    Order: ISP #2 -> ISP #3 -> ISP #1 -> DataImpulse -> IPRoyal.
+    Order: ISP #2 -> ISP #1 -> DataImpulse -> IPRoyal.
     ISP proxies first (cleanest IPs), residential as fallback.
     """
     proxies: List[str] = []
     if CDP_PROXY_ISP_URL_2 and CDP_PROXY_ISP_URL_2.strip():
         proxies.append(CDP_PROXY_ISP_URL_2.strip())
-    if CDP_PROXY_ISP_URL_3 and CDP_PROXY_ISP_URL_3.strip():
-        proxies.append(CDP_PROXY_ISP_URL_3.strip())
     if CDP_PROXY_ISP_URL and CDP_PROXY_ISP_URL.strip():
         proxies.append(CDP_PROXY_ISP_URL.strip())
     if CDP_PROXY_PRIMARY_URL and CDP_PROXY_PRIMARY_URL.strip():
@@ -4897,7 +4891,6 @@ def _get_proxy_label(proxy_url: Optional[str]) -> str:
     fallback_proxy = CDP_PROXY_FALLBACK_URL.strip() if CDP_PROXY_FALLBACK_URL else ""
     isp_proxy_1 = CDP_PROXY_ISP_URL.strip() if CDP_PROXY_ISP_URL else ""
     isp_proxy_2 = CDP_PROXY_ISP_URL_2.strip() if CDP_PROXY_ISP_URL_2 else ""
-    isp_proxy_3 = CDP_PROXY_ISP_URL_3.strip() if CDP_PROXY_ISP_URL_3 else ""
 
     if proxy_url == primary_proxy:
         return "primary_proxy"
@@ -4907,8 +4900,6 @@ def _get_proxy_label(proxy_url: Optional[str]) -> str:
         return "isp_proxy_1"
     if proxy_url == isp_proxy_2:
         return "isp_proxy_2"
-    if proxy_url == isp_proxy_3:
-        return "isp_proxy_3"
     return "unknown_proxy"
 
 
@@ -7495,6 +7486,8 @@ def _scrape_with_camoufox(
     proxy_url: Optional[str] = None,
     custom_selector: Optional[str] = None,
     original_price_selector: Optional[str] = None,
+    use_persistent_context: bool = False,
+    session_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Scrape via the Camoufox broker. Returns result dict or None."""
     if not CAMOUFOX_BROKER_URL:
@@ -7504,11 +7497,20 @@ def _scrape_with_camoufox(
         import httpx as _httpx
 
         sticky_proxy = _make_sticky_proxy_url_for_broker(proxy_url)
+
+        site_wait_selector = None
+        for domain, selectors in SITE_SELECTORS.items():
+            if domain in url:
+                site_wait_selector = ", ".join(selectors["price"])
+                break
+
         broker_payload = {
             "url": url,
             "proxy": sticky_proxy,
             "timeout_ms": 90000,
         }
+        if site_wait_selector:
+            broker_payload["wait_for_selector"] = site_wait_selector
 
         logger.info("camoufox_scrape_start url=%s proxy=%s", url[:80], bool(sticky_proxy))
         start_time = time.time()
@@ -9005,7 +9007,6 @@ def aci_status(user: User = Depends(get_current_user)):
         "proxy_fallback_configured": bool(CDP_PROXY_FALLBACK_URL.strip()),
         "proxy_isp_1_configured": bool(CDP_PROXY_ISP_URL.strip() if CDP_PROXY_ISP_URL else False),
         "proxy_isp_2_configured": bool(CDP_PROXY_ISP_URL_2.strip() if CDP_PROXY_ISP_URL_2 else False),
-        "proxy_isp_3_configured": bool(CDP_PROXY_ISP_URL_3.strip() if CDP_PROXY_ISP_URL_3 else False),
         "proxy_enabled": CDP_PROXY_ENABLED,
     }
 

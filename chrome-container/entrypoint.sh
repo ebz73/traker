@@ -8,10 +8,15 @@ export DISPLAY=:99
 # Wait for Xvfb to be ready
 sleep 1
 
-x11vnc -display :99 -nopw -forever -shared -rfbport 5900 &
+if [ -n "$VNC_PASSWORD" ]; then
+  x11vnc -storepasswd "$VNC_PASSWORD" /tmp/x11vnc.pass
+  x11vnc -display :99 -rfbauth /tmp/x11vnc.pass -forever -shared -rfbport 5900 &
+else
+  x11vnc -display :99 -nopw -forever -shared -rfbport 5900 &
+fi
 websockify --web /usr/share/novnc 6080 localhost:5900 &
 
-socat TCP-LISTEN:9223,fork,reuseaddr,bind=0.0.0.0 TCP:127.0.0.1:9222 &
+socat TCP-LISTEN:3000,fork,reuseaddr,bind=0.0.0.0 TCP:127.0.0.1:9222 &
 
 exec google-chrome-stable \
     --remote-debugging-port=9222 \

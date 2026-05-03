@@ -32,3 +32,7 @@ build.sh
 skills-lock.json
 .agents/
 .claude/
+
+# Azure deployment manifests (contain storage keys)
+chrome-aci.yaml
+camoufox-aci.yaml
