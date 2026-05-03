@@ -2767,7 +2767,20 @@ def split_safe_selectors(selector_str: str) -> List[str]:
 
 def _looks_blocked_html(html: str) -> bool:
     t = (html or "").lower()
-    return any(marker in t for marker in _BLOCKED_PAGE_MARKERS)
+    if not any(marker in t for marker in _BLOCKED_PAGE_MARKERS):
+        return False
+    # Positive-signal override: some sites (Walmart) ship hidden PerimeterX
+    # challenge markup in every product page. If the page also contains a
+    # real price AND product structure, the challenge isn't active — treat as valid.
+    has_price = bool(re.search(r"\$\d+\.\d{2}", t))
+    has_product_structure = (
+        'data-automation-id="product-price"' in t
+        or 'itemprop="price"' in t
+        or 'data-testid="price-wrap"' in t
+    )
+    if has_price and has_product_structure:
+        return False
+    return True
 
 
 def _extract_with_custom_selector_from_soup(
