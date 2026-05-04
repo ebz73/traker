@@ -60,6 +60,12 @@ else:
 # API key for authenticating requests from the backend
 BROKER_API_KEY = os.getenv("BROKER_API_KEY", "")
 
+# Domains where homepage warmup is skipped — direct product navigation works fine
+# with our fingerprint and the warmup adds ~5-8s per scrape with no benefit.
+# Walmart: verified direct navigation succeeds; warmup overhead was pushing total
+# scrape time past the broker's 90s timeout ceiling. Substring-matched against netloc.
+SKIP_WARMUP_DOMAINS = ("walmart.com","bestbuy.com", "hm.com")
+
 
 class ScrapeRequest(BaseModel):
     url: str
@@ -156,9 +162,10 @@ def _sync_scrape(url: str, proxy: Optional[str], timeout_ms: int,
             homepage = f"{parsed_url.scheme}://{parsed_url.netloc}/"
             path_only = parsed_url.path or "/"
             is_site_root_only = path_only.rstrip("/") in ("", "/") and not parsed_url.query
+            skip_warmup = any(d in parsed_url.netloc for d in SKIP_WARMUP_DOMAINS)
 
             warmup_ok = False
-            if not is_site_root_only:
+            if not is_site_root_only and not skip_warmup:
                 try:
                     logger.info("Camoufox warmup: %s", parsed_url.netloc)
                     page.goto(homepage, wait_until="domcontentloaded", timeout=20000)
@@ -168,6 +175,8 @@ def _sync_scrape(url: str, proxy: Optional[str], timeout_ms: int,
                     warmup_ok = True
                 except Exception as exc:
                     logger.debug("Homepage warmup failed (continuing): %s", exc)
+            elif skip_warmup:
+                logger.info("Camoufox warmup skipped (domain opted out): %s", parsed_url.netloc)
 
             # Same-origin referer after warmup matches in-site navigation; otherwise search referer.
             if warmup_ok:
