@@ -4409,6 +4409,17 @@ _CDP_HEALTH_LOCK = threading.Lock()
 _CDP_BROWSER_LOCK = threading.Lock()
 _CDP_PLAYWRIGHT: Optional[Any] = None
 _CDP_BROWSER: Optional[Any] = None
+# Persistent-browser lifecycle bookkeeping. All four are guarded by _CDP_BROWSER_LOCK.
+_CDP_BROWSER_CREATED_AT: float = 0.0
+_CDP_BROWSER_REQUEST_COUNT: int = 0
+_CDP_CONTEXT_TIMESTAMPS: Dict[int, float] = {}
+
+# Recycle thresholds — see _get_cdp_browser.
+_CDP_BROWSER_MAX_AGE_SECONDS = 30 * 60
+_CDP_BROWSER_MAX_REQUESTS = 100
+_CDP_CONTEXT_MAX_AGE_SECONDS = 5 * 60
+_CDP_CONTEXT_MAX_COUNT = 10
+_CDP_LIVENESS_PROBE_TIMEOUT_MS = 3000
 
 # ── CDP per-domain concurrency guard ─────────────────────────────────────
 # Prevents multiple simultaneous CDP scrapes for the same domain.
@@ -4646,10 +4657,11 @@ def _mark_cdp_unhealthy(cooldown_seconds: float = 90.0) -> None:
         _CDP_HEALTH_CACHE["checked_at"] = now
         _CDP_HEALTH_CACHE["ws_endpoint"] = None
         _CDP_HEALTH_CACHE["headers"] = {}
-        _CDP_HEALTH_CACHE["forced_unhealthy_until"] = max(
-            forced_until,
-            float(_CDP_HEALTH_CACHE.get("forced_unhealthy_until") or 0.0),
-        )
+        # Cap at 5 minutes from now. Never extend the cooldown further than this,
+        # otherwise repeated failures during a transient outage (e.g. Chrome ACI
+        # wedged) accumulate into permanent CDP disablement until process restart.
+        max_allowed = now + 300.0
+        _CDP_HEALTH_CACHE["forced_unhealthy_until"] = min(forced_until, max_allowed)
 
 
 def _cdp_host_needs_override(hostname: Optional[str]) -> bool:
@@ -5074,6 +5086,97 @@ def _cdp_attach_stealth_init(context) -> None:
         logger.debug("CDP stealth init script attach failed: %s", exc)
 
 
+def _reset_cdp_browser_state() -> None:
+    """Clear persistent-browser bookkeeping. Caller must hold _CDP_BROWSER_LOCK."""
+    global _CDP_BROWSER_CREATED_AT, _CDP_BROWSER_REQUEST_COUNT
+    _CDP_BROWSER_CREATED_AT = 0.0
+    _CDP_BROWSER_REQUEST_COUNT = 0
+    _CDP_CONTEXT_TIMESTAMPS.clear()
+
+
+def _disconnect_cdp_browser() -> None:
+    """Close the cached persistent browser and clear bookkeeping. Caller must hold the lock."""
+    global _CDP_BROWSER
+    if _CDP_BROWSER is not None:
+        try:
+            _CDP_BROWSER.close()
+        except Exception as exc:
+            logger.debug("Failed to close stale CDP browser: %s", exc)
+    _CDP_BROWSER = None
+    _reset_cdp_browser_state()
+
+
+def _sweep_stale_cdp_contexts(browser) -> None:
+    """Close contexts older than _CDP_CONTEXT_MAX_AGE_SECONDS, and cap total at
+    _CDP_CONTEXT_MAX_COUNT by closing oldest. Caller must hold _CDP_BROWSER_LOCK."""
+    try:
+        live_contexts = list(browser.contexts)
+    except Exception as exc:
+        logger.debug("Failed to enumerate CDP contexts during sweep: %s", exc)
+        return
+
+    now = time.time()
+    live_ids = {id(ctx) for ctx in live_contexts}
+    for stale_id in [k for k in _CDP_CONTEXT_TIMESTAMPS if k not in live_ids]:
+        _CDP_CONTEXT_TIMESTAMPS.pop(stale_id, None)
+
+    for ctx in live_contexts:
+        _CDP_CONTEXT_TIMESTAMPS.setdefault(id(ctx), now)
+
+    for ctx in live_contexts:
+        created = _CDP_CONTEXT_TIMESTAMPS.get(id(ctx), now)
+        if now - created > _CDP_CONTEXT_MAX_AGE_SECONDS:
+            try:
+                ctx.close()
+                logger.info("CDP sweep: closed stale context (age %.0fs)", now - created)
+            except Exception as exc:
+                logger.debug("CDP sweep: failed to close stale context: %s", exc)
+            _CDP_CONTEXT_TIMESTAMPS.pop(id(ctx), None)
+
+    try:
+        remaining = list(browser.contexts)
+    except Exception:
+        return
+    if len(remaining) > _CDP_CONTEXT_MAX_COUNT:
+        remaining.sort(key=lambda c: _CDP_CONTEXT_TIMESTAMPS.get(id(c), 0.0))
+        excess = len(remaining) - _CDP_CONTEXT_MAX_COUNT
+        for ctx in remaining[:excess]:
+            try:
+                ctx.close()
+                logger.info("CDP sweep: closed context to enforce count cap")
+            except Exception as exc:
+                logger.debug("CDP sweep: failed to close excess context: %s", exc)
+            _CDP_CONTEXT_TIMESTAMPS.pop(id(ctx), None)
+
+
+def _probe_cdp_browser_alive(browser) -> bool:
+    """Open a throwaway context+page and run a tiny evaluate() to verify the
+    renderer side of Chrome is responsive (not just metadata CDP calls).
+    Returns False if any step fails or hangs past the probe timeout."""
+    probe_ctx = None
+    probe_page = None
+    try:
+        probe_ctx = browser.new_context()
+        probe_page = probe_ctx.new_page()
+        probe_page.set_default_timeout(_CDP_LIVENESS_PROBE_TIMEOUT_MS)
+        probe_page.evaluate("1")
+        return True
+    except Exception as exc:
+        logger.warning("CDP liveness probe failed: %s", exc)
+        return False
+    finally:
+        try:
+            if probe_page is not None:
+                probe_page.close()
+        except Exception:
+            pass
+        try:
+            if probe_ctx is not None:
+                probe_ctx.close()
+        except Exception:
+            pass
+
+
 def _get_cdp_browser():
     """
     Persistent CDP browser singleton — used by _scrape_with_chrome_cdp() as the
@@ -5082,33 +5185,38 @@ def _get_cdp_browser():
 
     See also: _CDP_PLAYWRIGHT, _CDP_BROWSER, _CDP_BROWSER_LOCK
     """
-    global _CDP_PLAYWRIGHT, _CDP_BROWSER
+    global _CDP_PLAYWRIGHT, _CDP_BROWSER, _CDP_BROWSER_CREATED_AT, _CDP_BROWSER_REQUEST_COUNT
 
     with _CDP_BROWSER_LOCK:
+        if _CDP_BROWSER is not None:
+            age = time.time() - _CDP_BROWSER_CREATED_AT if _CDP_BROWSER_CREATED_AT else 0.0
+            if age > _CDP_BROWSER_MAX_AGE_SECONDS:
+                logger.info("Recycling CDP browser: age %.0fs exceeds max %.0fs",
+                            age, _CDP_BROWSER_MAX_AGE_SECONDS)
+                _disconnect_cdp_browser()
+            elif _CDP_BROWSER_REQUEST_COUNT >= _CDP_BROWSER_MAX_REQUESTS:
+                logger.info("Recycling CDP browser: %d requests served (cap %d)",
+                            _CDP_BROWSER_REQUEST_COUNT, _CDP_BROWSER_MAX_REQUESTS)
+                _disconnect_cdp_browser()
+
         try:
             if _CDP_BROWSER is not None and _CDP_BROWSER.is_connected():
-                # Validate connection is actually usable, not just "connected"
-                # by checking we can still list contexts. This catches stale WS connections.
                 try:
                     _ = _CDP_BROWSER.contexts
                 except Exception:
                     logger.warning("CDP browser reports connected but contexts unreachable — reconnecting")
-                    try:
-                        _CDP_BROWSER.close()
-                    except Exception:
-                        pass
-                    _CDP_BROWSER = None
-                    # Fall through to reconnection below
+                    _disconnect_cdp_browser()
                 else:
-                    return _CDP_BROWSER
+                    _sweep_stale_cdp_contexts(_CDP_BROWSER)
+                    if not _probe_cdp_browser_alive(_CDP_BROWSER):
+                        logger.warning("CDP browser failed liveness probe — reconnecting")
+                        _disconnect_cdp_browser()
+                    else:
+                        _CDP_BROWSER_REQUEST_COUNT += 1
+                        return _CDP_BROWSER
         except Exception as exc:
             logger.warning("Failed to validate cached CDP browser connection: %s", exc)
-            try:
-                if _CDP_BROWSER is not None:
-                    _CDP_BROWSER.close()
-            except Exception:
-                pass
-            _CDP_BROWSER = None
+            _disconnect_cdp_browser()
 
         if _CDP_PLAYWRIGHT is None:
             try:
@@ -5135,11 +5243,15 @@ def _get_cdp_browser():
                 connect_kwargs["headers"] = cdp_headers
 
             _CDP_BROWSER = _CDP_PLAYWRIGHT.chromium.connect_over_cdp(cdp_endpoint, **connect_kwargs)
+            _CDP_BROWSER_CREATED_AT = time.time()
+            _CDP_BROWSER_REQUEST_COUNT = 1
+            _CDP_CONTEXT_TIMESTAMPS.clear()
             return _CDP_BROWSER
         except Exception as exc:
             logger.warning("Chrome CDP connect failed: %s", exc)
             _mark_cdp_unhealthy(120.0)
             _CDP_BROWSER = None
+            _reset_cdp_browser_state()
             if _CDP_PLAYWRIGHT is not None:
                 try:
                     _CDP_PLAYWRIGHT.stop()
