@@ -13,6 +13,8 @@ _TREE = ast.parse(_SOURCE, filename=str(_MAIN_PATH))
 _WANTED_ASSIGNMENTS = {
     "_FUEL_CONTEXT_PATTERN",
     "_DOT_THOUSANDS_LOCALE_PREFIXES",
+    "OLD_PRICE_FRAGMENT_PATTERN",
+    "PRICE_TOKEN_PATTERN",
 }
 _WANTED_FUNCTIONS = {
     "_locale_uses_dot_thousands",

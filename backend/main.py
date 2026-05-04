@@ -26,6 +26,7 @@ import base64
 import datetime
 import copy
 import hashlib
+import html
 import ipaddress
 import json
 import logging
@@ -82,7 +83,7 @@ from passlib.context import CryptContext
 from patchright.sync_api import Locator
 from patchright.sync_api import TimeoutError as PlaywrightTimeoutError
 from patchright.sync_api import sync_playwright
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, String, cast, create_engine, func, inspect, or_, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
@@ -748,16 +749,16 @@ def _email_logo_block() -> str:
 
 def _verify_email_template(verify_url: str) -> Tuple[str, str]:
     logo = _email_logo_block()
-    html = f"""
+    body = f"""
 <!DOCTYPE html>
 <html><body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px;">
   {logo}
   <h1 style="color: #6366f1;">Welcome to TRAKER</h1>
   <p>Please verify your email address to activate your account.</p>
   <p style="margin: 24px 0;">
-    <a href="{verify_url}" style="background: #6366f1; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; display: inline-block;">Verify email</a>
+    <a href="{html.escape(verify_url, quote=True)}" style="background: #6366f1; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; display: inline-block;">Verify email</a>
   </p>
-  <p style="color: #666; font-size: 14px;">Or paste this link in your browser:<br><span style="word-break: break-all;">{verify_url}</span></p>
+  <p style="color: #666; font-size: 14px;">Or paste this link in your browser:<br><span style="word-break: break-all;">{html.escape(verify_url)}</span></p>
   <p style="color: #999; font-size: 13px; margin-top: 32px;">This link expires in 24 hours. If you didn't sign up for TRAKER, you can safely ignore this email.</p>
 </body></html>
 """
@@ -769,21 +770,21 @@ Please verify your email address to activate your account.
 
 This link expires in 24 hours. If you didn't sign up for TRAKER, you can safely ignore this email.
 """
-    return html, text
+    return body, text
 
 
 def _password_reset_template(reset_url: str, is_google_only: bool) -> Tuple[str, str]:
     logo = _email_logo_block()
     if is_google_only:
         login_url = FRONTEND_URL
-        html = f"""
+        body = f"""
 <!DOCTYPE html>
 <html><body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px;">
   {logo}
   <h1 style="color: #6366f1;">Password reset</h1>
   <p>You requested a password reset, but this account uses <strong>Google sign-in</strong> — there's no password to reset.</p>
   <p style="margin: 24px 0;">
-    <a href="{login_url}" style="background: #6366f1; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; display: inline-block;">Sign in with Google</a>
+    <a href="{html.escape(login_url, quote=True)}" style="background: #6366f1; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; display: inline-block;">Sign in with Google</a>
   </p>
   <p style="color: #999; font-size: 13px; margin-top: 32px;">If you didn't request this, you can safely ignore this email.</p>
 </body></html>
@@ -796,18 +797,18 @@ Sign in: {login_url}
 
 If you didn't request this, you can safely ignore this email.
 """
-        return html, text
+        return body, text
 
-    html = f"""
+    body = f"""
 <!DOCTYPE html>
 <html><body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px;">
   {logo}
   <h1 style="color: #6366f1;">Reset your password</h1>
   <p>Click the link below to set a new password.</p>
   <p style="margin: 24px 0;">
-    <a href="{reset_url}" style="background: #6366f1; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; display: inline-block;">Reset password</a>
+    <a href="{html.escape(reset_url, quote=True)}" style="background: #6366f1; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; display: inline-block;">Reset password</a>
   </p>
-  <p style="color: #666; font-size: 14px;">Or paste this link in your browser:<br><span style="word-break: break-all;">{reset_url}</span></p>
+  <p style="color: #666; font-size: 14px;">Or paste this link in your browser:<br><span style="word-break: break-all;">{html.escape(reset_url)}</span></p>
   <p style="color: #999; font-size: 13px; margin-top: 32px;">This link expires in 1 hour. If you didn't request a password reset, you can safely ignore this email.</p>
 </body></html>
 """
@@ -819,7 +820,7 @@ Click the link below to set a new password.
 
 This link expires in 1 hour. If you didn't request a password reset, you can safely ignore this email.
 """
-    return html, text
+    return body, text
 
 
 def _anti_bot_sleep(low: float, high: float) -> None:
@@ -900,6 +901,8 @@ PRICE_TOKEN_PATTERN = re.compile(
     r"(?:US\$|USD|EUR|GBP|JPY|INR|CAD|AUD|NZD|CHF|CNY|HKD|SGD|\$|€|£|¥|₹)\s*[\d.,]+|"
     r"[\d.,]+\s*(?:US\$|USD|EUR|GBP|JPY|INR|CAD|AUD|NZD|CHF|CNY|HKD|SGD|\$|€|£|¥|₹)?"
 )
+# Matches "was/list price/MSRP/original/compare at/..." price fragments —
+# stripped from raw text so the current price remains.
 OLD_PRICE_FRAGMENT_PATTERN = re.compile(
     r"(?i)(?:was|list\s*price|msrp|original|compare\s*at|regular\s*price|old\s*price|before|normally|typical)"
     r"[^\d\n]*(?:US\$|USD|EUR|GBP|JPY|INR|CAD|AUD|NZD|CHF|CNY|HKD|SGD|\$|€|£|¥|₹)?\s*[\d.,]+"
@@ -1219,6 +1222,44 @@ def _guess_locale_hint_from_url(url: str) -> str:
     if host.endswith(".pt"):
         return "pt"
     return ""
+
+
+def _validate_user_url(url: str) -> None:
+    """Reject URLs that could SSRF-attack internal/cloud infrastructure.
+    Raises HTTPException(400) on rejection. Returns None on success."""
+    if not url or not isinstance(url, str):
+        raise HTTPException(status_code=400, detail="URL is required")
+
+    try:
+        parsed = urlparse(url.strip())
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid URL")
+
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(status_code=400, detail="URL must use http or https")
+
+    if not parsed.hostname:
+        raise HTTPException(status_code=400, detail="URL must have a hostname")
+
+    hostname_lower = parsed.hostname.lower()
+
+    blocked_hostnames = {
+        "169.254.169.254",
+        "metadata.google.internal",
+        "metadata.azure.com",
+        "metadata",
+        "localhost",
+    }
+    if hostname_lower in blocked_hostnames:
+        raise HTTPException(status_code=400, detail="URL targets a restricted host")
+
+    try:
+        ip = ipaddress.ip_address(hostname_lower)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+            raise HTTPException(status_code=400, detail="URL targets an internal IP")
+    except ValueError:
+        # hostname is a domain name, not an IP literal — that's fine
+        pass
 
 
 def _canonical_url(url: Optional[str]) -> str:
@@ -1694,12 +1735,30 @@ _EXTENSION_HEARTBEATS: Dict[str, float] = {}
 _EXTENSION_HEARTBEAT_LOCK = threading.Lock()
 
 
+def _validate_http_url(v: str) -> str:
+    """Pydantic field validator: reject URLs that aren't http or https."""
+    raw = (v or "").strip()
+    if not raw:
+        raise ValueError("URL is required")
+    parsed = urlparse(raw)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("URL must use http or https")
+    if not parsed.hostname:
+        raise ValueError("URL must have a hostname")
+    return raw
+
+
 class ProductRequest(BaseModel):
     url: str
     custom_selector: Optional[str] = None
     original_price_selector: Optional[str] = None
     original_price: Optional[float] = None
     skip_extension: Optional[bool] = False
+
+    @field_validator('url')
+    @classmethod
+    def _check_url(cls, v: str) -> str:
+        return _validate_http_url(v)
 
 
 class TrackedProductRequest(BaseModel):
@@ -1713,6 +1772,11 @@ class TrackedProductRequest(BaseModel):
     currency_code: Optional[str] = None
     threshold: Optional[float] = None
     frequency: Optional[str] = None
+
+    @field_validator('url')
+    @classmethod
+    def _check_url(cls, v: str) -> str:
+        return _validate_http_url(v)
 
 
 class ExtensionPriceReport(BaseModel):
@@ -7830,6 +7894,21 @@ def _send_alert_email(to_emails: List[str], subject: str, html_body: str) -> boo
         return False
 
 
+def _safe_email_href(url: Optional[str]) -> str:
+    """Return an HTML-attribute-safe href, defaulting to '#' for non-http(s) URLs.
+    Prevents javascript: and data: URLs from being rendered as clickable links in emails."""
+    raw = (url or "").strip()
+    if not raw:
+        return "#"
+    try:
+        parsed = urlparse(raw)
+        if parsed.scheme not in ("http", "https"):
+            return "#"
+    except Exception:
+        return "#"
+    return html.escape(raw, quote=True)
+
+
 def _build_alert_digest_html(alerts: List[PriceAlert], user_email: str) -> str:
     """Build a simple HTML email body for a batch of price alerts."""
     rows = []
@@ -7839,11 +7918,14 @@ def _build_alert_digest_html(alerts: List[PriceAlert], user_email: str) -> str:
         new_str = f"{symbol}{a.new_price:.2f}"
         threshold_str = f"{symbol}{a.threshold:.2f}"
         domain = _get_domain(a.url)
+        safe_url = _safe_email_href(a.url)
+        safe_name = html.escape(a.product_name or "Product")
+        safe_domain = html.escape(domain)
         rows.append(
             f'<tr>'
             f'<td style="padding:8px;border-bottom:1px solid #eee;">'
-            f'<a href="{a.url}" style="color:#5636ef;text-decoration:none;">{a.product_name or "Product"}</a>'
-            f'<br><span style="color:#999;font-size:12px;">{domain}</span></td>'
+            f'<a href="{safe_url}" style="color:#5636ef;text-decoration:none;">{safe_name}</a>'
+            f'<br><span style="color:#999;font-size:12px;">{safe_domain}</span></td>'
             f'<td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">{old_str}</td>'
             f'<td style="padding:8px;border-bottom:1px solid #eee;text-align:right;color:#cc0000;font-weight:700;">{new_str}</td>'
             f'<td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">{threshold_str}</td>'
@@ -7877,14 +7959,14 @@ def _build_alert_digest_html(alerts: List[PriceAlert], user_email: str) -> str:
                     {table_rows}
                 </tbody>
             </table>
-            <a href="{cta_url}"
+            <a href="{_safe_email_href(cta_url)}"
                style="display:inline-block;background:#5636ef;color:#fff;padding:10px 24px;
                       border-radius:8px;text-decoration:none;font-weight:600;margin-top:8px;">
                 {cta_text}
             </a>
             <p style="color:#999;font-size:12px;margin-top:20px;">
                 You're receiving this because you enabled email alerts on Traker.
-                <br>Sent to: {user_email}
+                <br>Sent to: {html.escape(user_email or '')}
             </p>
         </div>
     </div>
@@ -8070,6 +8152,7 @@ def _build_scrape_response(
 
 @app.post("/scrape")
 def scrape_price(product: ProductRequest, caller: User = Depends(get_current_user)):
+    _validate_user_url(product.url)
     scrape_start_time = time.time()
     caller_user_id = str(caller.id)
     latest_selectors = _get_latest_selectors_for_url(product.url, user_id=caller_user_id)

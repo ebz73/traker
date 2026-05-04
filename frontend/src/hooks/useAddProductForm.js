@@ -24,6 +24,24 @@ export function useAddProductForm() {
       showToast(msg, 'error')
       return null
     }
+
+    let parsedUrl
+    try {
+      parsedUrl = new URL(trimmedUrl)
+    } catch {
+      const msg = 'Please enter a valid URL.'
+      setErrors((prev) => ({ ...prev, url: msg }))
+      showToast(msg, 'error')
+      return null
+    }
+
+    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+      const msg = 'URL must start with http:// or https://'
+      setErrors((prev) => ({ ...prev, url: msg }))
+      showToast(msg, 'error')
+      return null
+    }
+
     setErrors((prev) => ({ ...prev, url: '' }))
 
     const parsedThreshold = threshold === '' ? '' : Number(threshold)
