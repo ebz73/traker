@@ -369,6 +369,20 @@ export function AuthProvider({ children }) {
         showToast('Failed to start Google sign-in.', 'error')
         return
       }
+
+      let parsedAuthUrl
+      try {
+        parsedAuthUrl = new URL(data.authorize_url)
+      } catch {
+        showToast('Invalid Google sign-in URL.', 'error')
+        return
+      }
+
+      if (parsedAuthUrl.origin !== 'https://accounts.google.com') {
+        showToast('Invalid Google sign-in URL.', 'error')
+        return
+      }
+
       window.location.href = data.authorize_url
     } catch {
       showToast('Connection failed.', 'error')
