@@ -124,6 +124,10 @@ function ToastNotification({ toast, onDismiss }) {
   const hoverPausedRef = useRef(false)
   const touchPausedRef = useRef(false)
   const focusPausedRef = useRef(false)
+  const outerRef = useRef(null)
+  const touchStartYRef = useRef(0)
+  const touchDeltaYRef = useRef(0)
+  const isDraggingRef = useRef(false)
 
   const clearTimers = useCallback(() => {
     if (timersRef.current.sync) clearTimeout(timersRef.current.sync)
@@ -189,15 +193,53 @@ function ToastNotification({ toast, onDismiss }) {
     syncPauseState()
   }, [syncPauseState])
 
-  const handleTouchStart = useCallback(() => {
-    touchPausedRef.current = true
-    syncPauseState()
-  }, [syncPauseState])
+  const handleTouchStart = useCallback(
+    (e) => {
+      const touch = e.touches?.[0]
+      if (!touch) return
+      touchStartYRef.current = touch.clientY
+      touchDeltaYRef.current = 0
+      isDraggingRef.current = false
+      touchPausedRef.current = true
+      syncPauseState()
+    },
+    [syncPauseState],
+  )
+
+  const handleTouchMove = useCallback((e) => {
+    if (dismissingRef.current) return
+    const touch = e.touches?.[0]
+    if (!touch) return
+    const deltaY = touch.clientY - touchStartYRef.current
+    touchDeltaYRef.current = deltaY
+    if (!isDraggingRef.current && deltaY < -10) {
+      isDraggingRef.current = true
+      outerRef.current?.classList.add('toast-dragging')
+    }
+    if (isDraggingRef.current) {
+      const clamped = Math.min(0, deltaY)
+      outerRef.current?.style.setProperty('--toast-drag-y', `${clamped}px`)
+    }
+  }, [])
 
   const handleTouchEnd = useCallback(() => {
+    if (isDraggingRef.current) {
+      const passedThreshold = touchDeltaYRef.current < -60
+      isDraggingRef.current = false
+      touchDeltaYRef.current = 0
+      outerRef.current?.classList.remove('toast-dragging')
+      outerRef.current?.style.removeProperty('--toast-drag-y')
+      touchPausedRef.current = false
+      if (passedThreshold) {
+        startDismiss(true)
+        return
+      }
+      syncPauseState()
+      return
+    }
     touchPausedRef.current = false
     syncPauseState()
-  }, [syncPauseState])
+  }, [syncPauseState, startDismiss])
 
   const handleFocus = useCallback(() => {
     focusPausedRef.current = true
@@ -275,6 +317,7 @@ function ToastNotification({ toast, onDismiss }) {
 
   return (
     <div
+      ref={outerRef}
       className={`toast-outer ${visible ? 'toast-enter' : 'toast-exit'}`}
       role={type === 'error' ? 'alert' : 'status'}
       aria-live="polite"
@@ -282,6 +325,7 @@ function ToastNotification({ toast, onDismiss }) {
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
       onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
       onTouchCancel={handleTouchEnd}
       onFocus={handleFocus}
