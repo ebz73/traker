@@ -4,7 +4,12 @@ import { CHARACTER_COLORS } from './constants'
 import { pseudoRandom } from './utils'
 
 const ENTER_DELAY_MS = 30
-const AUTO_HIDE_MS = 10000
+const AUTO_HIDE_DURATIONS = {
+  success: 3500,
+  neutral: 4000,
+  error: 6000,
+}
+const DEFAULT_AUTO_HIDE_MS = AUTO_HIDE_DURATIONS.neutral
 const EXIT_DURATION_MS = 350
 const CHARACTERS = [
   { type: 'orange', delay: '0ms' },
@@ -114,6 +119,11 @@ function ToastNotification({ toast, onDismiss }) {
   const renderedToastRef = useRef(null)
   const visibleRef = useRef(false)
   const dismissingRef = useRef(false)
+  const timerStartedAtRef = useRef(0)
+  const remainingMsRef = useRef(0)
+  const hoverPausedRef = useRef(false)
+  const touchPausedRef = useRef(false)
+  const focusPausedRef = useRef(false)
 
   const clearTimers = useCallback(() => {
     if (timersRef.current.sync) clearTimeout(timersRef.current.sync)
@@ -121,6 +131,9 @@ function ToastNotification({ toast, onDismiss }) {
     if (timersRef.current.auto) clearTimeout(timersRef.current.auto)
     if (timersRef.current.exit) clearTimeout(timersRef.current.exit)
     timersRef.current = { sync: null, enter: null, auto: null, exit: null }
+    hoverPausedRef.current = false
+    touchPausedRef.current = false
+    focusPausedRef.current = false
   }, [])
 
   const startDismiss = useCallback(
@@ -144,6 +157,57 @@ function ToastNotification({ toast, onDismiss }) {
     },
     [clearTimers, onDismiss],
   )
+
+  const isPaused = useCallback(
+    () => hoverPausedRef.current || touchPausedRef.current || focusPausedRef.current,
+    [],
+  )
+
+  const syncPauseState = useCallback(() => {
+    if (dismissingRef.current) return
+    const shouldPause = isPaused()
+    if (shouldPause && timersRef.current.auto) {
+      clearTimeout(timersRef.current.auto)
+      timersRef.current.auto = null
+      remainingMsRef.current = Math.max(
+        0,
+        remainingMsRef.current - (Date.now() - timerStartedAtRef.current),
+      )
+    } else if (!shouldPause && !timersRef.current.auto && remainingMsRef.current > 0) {
+      timerStartedAtRef.current = Date.now()
+      timersRef.current.auto = setTimeout(() => startDismiss(true), remainingMsRef.current)
+    }
+  }, [isPaused, startDismiss])
+
+  const handleMouseEnter = useCallback(() => {
+    hoverPausedRef.current = true
+    syncPauseState()
+  }, [syncPauseState])
+
+  const handleMouseLeave = useCallback(() => {
+    hoverPausedRef.current = false
+    syncPauseState()
+  }, [syncPauseState])
+
+  const handleTouchStart = useCallback(() => {
+    touchPausedRef.current = true
+    syncPauseState()
+  }, [syncPauseState])
+
+  const handleTouchEnd = useCallback(() => {
+    touchPausedRef.current = false
+    syncPauseState()
+  }, [syncPauseState])
+
+  const handleFocus = useCallback(() => {
+    focusPausedRef.current = true
+    syncPauseState()
+  }, [syncPauseState])
+
+  const handleBlur = useCallback(() => {
+    focusPausedRef.current = false
+    syncPauseState()
+  }, [syncPauseState])
 
   useEffect(() => {
     renderedToastRef.current = renderedToast
@@ -177,19 +241,26 @@ function ToastNotification({ toast, onDismiss }) {
       setRenderedToast(toast)
     }, 0)
 
+    const toastType =
+      toast.type === 'success' || toast.type === 'error' || toast.type === 'neutral'
+        ? toast.type
+        : 'neutral'
+    const duration = AUTO_HIDE_DURATIONS[toastType] ?? DEFAULT_AUTO_HIDE_MS
+
+    const totalDuration = visibleRef.current ? duration : ENTER_DELAY_MS + duration
+    timerStartedAtRef.current = Date.now()
+    remainingMsRef.current = totalDuration
+
     if (!visibleRef.current) {
       timersRef.current.enter = setTimeout(() => {
         visibleRef.current = true
         setVisible(true)
       }, ENTER_DELAY_MS)
-      timersRef.current.auto = setTimeout(() => {
-        startDismiss(true)
-      }, ENTER_DELAY_MS + AUTO_HIDE_MS)
-    } else {
-      timersRef.current.auto = setTimeout(() => {
-        startDismiss(true)
-      }, AUTO_HIDE_MS)
     }
+
+    timersRef.current.auto = setTimeout(() => {
+      startDismiss(true)
+    }, totalDuration)
 
     return clearTimers
   }, [toast, clearTimers, startDismiss])
@@ -208,6 +279,13 @@ function ToastNotification({ toast, onDismiss }) {
       role={type === 'error' ? 'alert' : 'status'}
       aria-live="polite"
       aria-atomic="true"
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+      onTouchCancel={handleTouchEnd}
+      onFocus={handleFocus}
+      onBlur={handleBlur}
       onKeyDown={(e) => {
         if (e.key === 'Escape') startDismiss(true)
       }}
