@@ -3,6 +3,7 @@ import { useNavigationContext } from '../context/NavigationContext'
 import { usePriceHistoryContext } from '../context/PriceHistoryContext'
 import { useProductsContext } from '../context/ProductsContext'
 import ProductCard from './ProductCard'
+import ProductCardSkeleton from './ProductCardSkeleton'
 
 // Sort header, product list, back-to-top button. The sortedProducts useMemo
 // (formerly in AppShell) lives here because sortBy comes from useNavigationContext
@@ -50,26 +51,36 @@ export default function DroplistTab() {
         </div>
       </div>
 
-      {products.products.length === 0 && <div className="card">No products yet. Add one from Home.</div>}
+      {products.isInitialLoading && products.products.length === 0 ? (
+        <div className="listWrap">
+          {Array.from({ length: 4 }).map((_, index) => (
+            <ProductCardSkeleton key={`product-skeleton-${index}`} />
+          ))}
+        </div>
+      ) : (
+        <>
+          {products.products.length === 0 && <div className="card">No products yet. Add one from Home.</div>}
 
-      <div className="listWrap">
-        {sortedProducts.map((product) => (
-          <ProductCard
-            key={product.id}
-            product={product}
-            loadingId={products.loadingId}
-            scrapingUrls={products.scrapingUrls}
-            expandedHistory={history.expandedHistory}
-            historyByUrl={history.historyByUrl}
-            historyLoadingByUrl={history.historyLoadingByUrl}
-            onCheck={products.checkProductNow}
-            onRedoPick={products.redoVisualPick}
-            onRemove={products.removeProduct}
-            onUpdate={products.updateProduct}
-            onToggleHistory={history.toggleHistory}
-          />
-        ))}
-      </div>
+          <div className="listWrap">
+            {sortedProducts.map((product) => (
+              <ProductCard
+                key={product.id}
+                product={product}
+                loadingId={products.loadingId}
+                scrapingUrls={products.scrapingUrls}
+                expandedHistory={history.expandedHistory}
+                historyByUrl={history.historyByUrl}
+                historyLoadingByUrl={history.historyLoadingByUrl}
+                onCheck={products.checkProductNow}
+                onRedoPick={products.redoVisualPick}
+                onRemove={products.removeProduct}
+                onUpdate={products.updateProduct}
+                onToggleHistory={history.toggleHistory}
+              />
+            ))}
+          </div>
+        </>
+      )}
 
       {showBackToTop && (
         <button

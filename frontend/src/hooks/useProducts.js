@@ -49,6 +49,7 @@ export function useProducts({ ext, email, history, setTab }) {
   const [products, setProducts] = useState([])
   const [loadingId, setLoadingId] = useState('')
   const [scrapingUrls, setScrapingUrls] = useState(new Set())
+  const [isInitialLoading, setIsInitialLoading] = useState(true)
 
   // Per-hook logout cleanup: reset products state when auth flips truthy → falsy.
   // Indirected through resetOnLogout() to satisfy react-hooks/set-state-in-effect.
@@ -58,6 +59,7 @@ export function useProducts({ ext, email, history, setTab }) {
       setProducts([])
       setLoadingId('')
       setScrapingUrls(new Set())
+      setIsInitialLoading(true)
     }
     const wasLoggedIn = Boolean(prevAuthTokenRef.current)
     const isNowLoggedIn = Boolean(authToken)
@@ -91,20 +93,23 @@ export function useProducts({ ext, email, history, setTab }) {
 
   const removeProduct = useCallback(
     (id) => {
-      const product = products.find((p) => p.id === id)
-      setProducts((prev) => prev.filter((p) => p.id !== id))
+      let removed = null
+      setProducts((prev) => {
+        removed = prev.find((p) => p.id === id) || null
+        return prev.filter((p) => p.id !== id)
+      })
       showToast('Product removed.', 'neutral')
-      if (product) {
-        if (product.backendId) {
-          authFetch(`${API}/tracked-products/${product.backendId}`, { method: 'DELETE' }).catch(() => {})
+      if (removed) {
+        if (removed.backendId) {
+          authFetch(`${API}/tracked-products/${removed.backendId}`, { method: 'DELETE' }).catch(() => {})
         } else {
-          authFetch(`${API}/tracked-products/by-url/delete?url=${encodeURIComponent(product.url)}`, {
+          authFetch(`${API}/tracked-products/by-url/delete?url=${encodeURIComponent(removed.url)}`, {
             method: 'DELETE',
           }).catch(() => {})
         }
       }
     },
-    [authFetch, products, showToast],
+    [authFetch, showToast],
   )
 
   const addProductViaExtension = useCallback(
@@ -606,6 +611,8 @@ export function useProducts({ ext, email, history, setTab }) {
     setProducts,
     loadingId,
     scrapingUrls,
+    isInitialLoading,
+    setIsInitialLoading,
     addProduct,
     addProductViaExtension,
     addProductViaBackend,

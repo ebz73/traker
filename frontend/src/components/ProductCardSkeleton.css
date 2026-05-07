@@ -1,0 +1,20 @@
+.productCardSkeleton {
+  display: grid;
+  gap: 14px;
+}
+
+.productCardSkeleton .productHead {
+  align-items: flex-start;
+}
+
+.productCardSkeletonTitleBlock {
+  display: grid;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.productCardSkeletonMiniBox {
+  display: grid;
+  gap: 8px;
+}

@@ -28,8 +28,11 @@ export function ProductsProvider({ children }) {
   useProductsSync({
     products: products.products,
     setProducts: products.setProducts,
+    setIsInitialLoading: products.setIsInitialLoading,
     fetchEmailSettings: email.fetchEmailSettings,
     fetchPendingAlertCount: email.fetchPendingAlertCount,
+    setEmailSettingsInitialLoading: email.setEmailSettingsInitialLoading,
+    setPendingAlertCountInitialLoading: email.setPendingAlertCountInitialLoading,
   })
 
   return <ProductsContext.Provider value={products}>{children}</ProductsContext.Provider>

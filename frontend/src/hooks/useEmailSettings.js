@@ -15,7 +15,9 @@ export function useEmailSettings() {
 
   const [emailSettings, setEmailSettings] = useState({ enabled: false, recipients: [], primaryEmail: '' })
   const [emailSettingsLoading, setEmailSettingsLoading] = useState(false)
+  const [emailSettingsInitialLoading, setEmailSettingsInitialLoading] = useState(true)
   const [pendingAlertCount, setPendingAlertCount] = useState(0)
+  const [pendingAlertCountInitialLoading, setPendingAlertCountInitialLoading] = useState(true)
   const [newRecipientEmail, setNewRecipientEmail] = useState('')
   const [recipientEmailInvalid, setRecipientEmailInvalid] = useState(false)
 
@@ -28,7 +30,9 @@ export function useEmailSettings() {
     const resetOnLogout = () => {
       setEmailSettings({ enabled: false, recipients: [], primaryEmail: '' })
       setEmailSettingsLoading(false)
+      setEmailSettingsInitialLoading(true)
       setPendingAlertCount(0)
+      setPendingAlertCountInitialLoading(true)
       setNewRecipientEmail('')
       setRecipientEmailInvalid(false)
     }
@@ -148,7 +152,11 @@ export function useEmailSettings() {
   return {
     emailSettings,
     emailSettingsLoading,
+    emailSettingsInitialLoading,
+    setEmailSettingsInitialLoading,
     pendingAlertCount,
+    pendingAlertCountInitialLoading,
+    setPendingAlertCountInitialLoading,
     newRecipientEmail,
     setNewRecipientEmail,
     recipientEmailInvalid,

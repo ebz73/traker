@@ -3,6 +3,7 @@ import { useAddProductFormContext } from '../context/AddProductFormContext'
 import { useEmailSettingsContext } from '../context/EmailSettingsContext'
 import { useNavigationContext } from '../context/NavigationContext'
 import { useProductsContext } from '../context/ProductsContext'
+import StatCardSkeleton from './StatCardSkeleton'
 
 // Stats grid + add-product form + how-it-works steps.
 //
@@ -27,30 +28,40 @@ export default function HomeTab() {
   return (
     <>
       <section className="statsGrid" aria-label="Tracking overview">
-        <div className="card">
-          <h2 className="statsHeading">Tracking</h2>
-          <p>{products.trackedCount} products</p>
-        </div>
-        <div className="card">
-          <h2 className="statsHeading">Below Threshold</h2>
-          <p>{products.belowThresholdCount} products</p>
-        </div>
-        <div
-          className="card"
-          style={{ cursor: 'pointer' }}
-          onClick={() => setTab('emailSettings')}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault()
-              setTab('emailSettings')
-            }
-          }}
-          role="button"
-          tabIndex={0}
-        >
-          <h2 className="statsHeading">Email Alerts</h2>
-          <p>{email.emailSettings.enabled ? `On · ${email.pendingAlertCount} pending` : 'Off'}</p>
-        </div>
+        {products.isInitialLoading || email.emailSettingsInitialLoading || email.pendingAlertCountInitialLoading ? (
+          <>
+            <StatCardSkeleton />
+            <StatCardSkeleton />
+            <StatCardSkeleton />
+          </>
+        ) : (
+          <>
+            <div className="card">
+              <h2 className="statsHeading">Tracking</h2>
+              <p>{products.trackedCount} products</p>
+            </div>
+            <div className="card">
+              <h2 className="statsHeading">Below Threshold</h2>
+              <p>{products.belowThresholdCount} products</p>
+            </div>
+            <div
+              className="card"
+              style={{ cursor: 'pointer' }}
+              onClick={() => setTab('emailSettings')}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  setTab('emailSettings')
+                }
+              }}
+              role="button"
+              tabIndex={0}
+            >
+              <h2 className="statsHeading">Email Alerts</h2>
+              <p>{email.emailSettings.enabled ? `On · ${email.pendingAlertCount} pending` : 'Off'}</p>
+            </div>
+          </>
+        )}
       </section>
 
       <section className="card addCard" aria-label="Add product form">

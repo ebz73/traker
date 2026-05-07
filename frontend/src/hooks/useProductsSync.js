@@ -20,7 +20,15 @@ import { useToast } from './useToast'
 //   - Periodic + window-focus re-sync (every 10s + on focus)
 //   - Extension sync message listener (PT_TRACKED_PRODUCTS_SYNCED)
 //   - Persist products to localStorage on change
-export function useProductsSync({ products, setProducts, fetchEmailSettings, fetchPendingAlertCount }) {
+export function useProductsSync({
+  products,
+  setProducts,
+  setIsInitialLoading,
+  fetchEmailSettings,
+  fetchPendingAlertCount,
+  setEmailSettingsInitialLoading,
+  setPendingAlertCountInitialLoading,
+}) {
   const { authToken, authEmail, authFetch } = useAuth()
   const { showToast } = useToast()
   const isLoggedIn = Boolean(authToken)
@@ -141,10 +149,20 @@ export function useProductsSync({ products, setProducts, fetchEmailSettings, fet
     } catch {
       setProducts([])
     }
-    fetchTrackedProducts()
-    fetchEmailSettings()
-    fetchPendingAlertCount()
-  }, [authToken, isLoggedIn, fetchTrackedProducts, fetchEmailSettings, fetchPendingAlertCount, setProducts])
+    fetchTrackedProducts().finally(() => setIsInitialLoading(false))
+    fetchEmailSettings().finally(() => setEmailSettingsInitialLoading(false))
+    fetchPendingAlertCount().finally(() => setPendingAlertCountInitialLoading(false))
+  }, [
+    authToken,
+    isLoggedIn,
+    fetchTrackedProducts,
+    fetchEmailSettings,
+    fetchPendingAlertCount,
+    setProducts,
+    setIsInitialLoading,
+    setEmailSettingsInitialLoading,
+    setPendingAlertCountInitialLoading,
+  ])
 
   // Periodic re-sync (10s) + window-focus re-sync.
   useEffect(() => {
