@@ -2404,8 +2404,11 @@ def delete_account(caller: User = Depends(get_current_user)):
             db.query(ExtensionJob).filter(ExtensionJob.user_id == caller_user_id).delete(synchronize_session=False)
             db.query(PriceHistory).filter(PriceHistory.user_id == caller_user_id).delete(synchronize_session=False)
             db.query(TrackedProduct).filter(TrackedProduct.user_id == caller_user_id).delete(synchronize_session=False)
+            db.query(ScrapeAttempt).filter(ScrapeAttempt.user_id == caller_user_id).delete(synchronize_session=False)
             db.query(User).filter(User.id == caller.id).delete(synchronize_session=False)
             db.commit()
+        with _EXTENSION_HEARTBEAT_LOCK:
+            _EXTENSION_HEARTBEATS.pop(caller_user_id, None)
         logger.info("account_delete_success user=%s", caller_user_id)
         return {"ok": True, "message": "Account and all associated data have been permanently deleted."}
     except SQLAlchemyError as exc:
