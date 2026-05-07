@@ -142,7 +142,7 @@ function Confetti({ active }) {
   return <div className="lp-confetti-container">{pieces}</div>
 }
 
-function PasswordRequirements({ password, visible }) {
+function PasswordRequirements({ password, visible, focused }) {
   const hasMinLength = password.length >= 8
   const hasLetter = /[a-zA-Z]/.test(password)
   const hasDigit = /[0-9]/.test(password)
@@ -165,7 +165,10 @@ function PasswordRequirements({ password, visible }) {
   }, [sparkling])
 
   return (
-    <div className="lp-password-requirements-wrap" data-sparkling={sparkling || undefined}>
+    <div
+      className={`lp-password-requirements-wrap${focused ? ' lp-password-requirements-wrap--expanded' : ''}`}
+      data-sparkling={sparkling || undefined}
+    >
       <ul
         className={`lp-password-requirements ${visible ? 'visible' : 'hidden'}`}
         aria-label="Password requirements"
@@ -914,6 +917,7 @@ function LoginPage() {
                   <PasswordRequirements
                     password={loginPassword}
                     visible={resetPasswordFocused || loginPassword.length > 0}
+                    focused={resetPasswordFocused}
                   />
                 </div>
                 {authError && <div className="lp-error">{authError}</div>}
@@ -1000,6 +1004,7 @@ function LoginPage() {
                 <PasswordRequirements
                   password={loginPassword}
                   visible={signupPasswordFocused || loginPassword.length > 0}
+                  focused={signupPasswordFocused}
                 />
               )}
               {isLogin && (

@@ -564,6 +564,7 @@
 
 .lp-googleBtn {
   display: flex;
+
   align-items: center;
   justify-content: center;
   gap: 10px;
@@ -647,14 +648,14 @@
 }
 
 @media (max-width: 1400px) and (min-width: 1025px) {
-  .lp-characterGroup {
+  .lp-stage {
     transform: scale(0.75) translateX(-10%);
     transform-origin: center center;
   }
 }
 
 @media (max-width: 1200px) and (min-width: 1025px) {
-  .lp-characterGroup {
+  .lp-stage {
     transform: scale(0.6) translateX(-15%);
     transform-origin: center center;
   }
@@ -702,5 +703,61 @@
 
   .lp-mobileBrand {
     display: inline-flex;
+  }
+}
+
+@media (max-height: 500px) {
+  .lp-rightPanel {
+    padding-top: calc(12px + env(safe-area-inset-top));
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+    align-items: flex-start;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .lp-formWrap {
+    gap: 12px;
+  }
+
+  .lp-mobileBrand {
+    display: none;
+  }
+
+  .lp-heading {
+    font-size: 1.25rem;
+  }
+
+  .lp-subtitle {
+    font-size: 0.9rem;
+    margin-top: 4px;
+  }
+
+  .lp-form {
+    gap: 12px;
+  }
+
+  .lp-input {
+    height: 40px;
+  }
+
+  .lp-submitBtn {
+    height: 40px;
+  }
+
+  .lp-googleBtn {
+    height: 40px;
+    padding: 0 16px;
+  }
+
+  .lp-password-requirements-wrap {
+    max-height: 0;
+    opacity: 0;
+    overflow: hidden;
+    transition: max-height 200ms ease, opacity 150ms ease;
+  }
+
+  .lp-password-requirements-wrap--expanded {
+    max-height: 200px;
+    opacity: 1;
   }
 }
