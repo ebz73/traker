@@ -21,8 +21,306 @@
         document.documentElement.setAttribute('data-theme', theme);
         var meta = document.querySelector('meta[name="theme-color"]');
         if (meta) meta.setAttribute('content', theme === 'dark' ? '#0f1117' : '#6c3ff5');
+
+        var tabParam = '';
+        try {
+          tabParam = (new URLSearchParams(window.location.search).get('tab') || '').toLowerCase();
+        } catch (e) { /* URLSearchParams unavailable — fall through to default */ }
+        var bootTab = (tabParam === 'droplist' || tabParam === 'emailsettings') ? tabParam : 'home';
+        document.documentElement.setAttribute('data-boot-tab', bootTab);
       })();
     </script>
+    <style>
+      /* ---- base + theme ---- */
+      .boot-shell {
+        position: fixed;
+        inset: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        background: #dbe3f1;
+      }
+      [data-theme="dark"] .boot-shell { background: #0f1117; }
+
+      /* ---- skeleton + shimmer ---- */
+      .boot-skel {
+        position: relative;
+        overflow: hidden;
+        background: #e8eef9;
+        border-radius: 6px;
+      }
+      [data-theme="dark"] .boot-skel { background: #282c3a; }
+      .boot-skel::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.65) 50%, transparent 100%);
+        transform: translateX(-100%);
+        animation: boot-shimmer 1.5s ease-in-out infinite;
+      }
+      [data-theme="dark"] .boot-skel::after {
+        background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.06) 50%, transparent 100%);
+      }
+      @keyframes boot-shimmer { to { transform: translateX(100%); } }
+      @keyframes boot-pulse {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.06); }
+      }
+
+      /* ---- topbar ---- */
+      .boot-topbar {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        height: 60px;
+        gap: 14px;
+        padding: 0 14px;
+        background: #ffffff;
+        border-bottom: 1px solid #cad6e8;
+      }
+      [data-theme="dark"] .boot-topbar { background: #11131a; border-bottom-color: #2d3344; }
+      .boot-topbar-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
+      .boot-logo {
+        flex: 0 0 auto;
+        width: 40px;
+        height: 40px;
+        border-radius: 12px;
+        background: linear-gradient(160deg, #4554ec, #8f1fff);
+        color: #fff;
+        font: 700 28px/1 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        animation: boot-pulse 1.5s ease-in-out infinite;
+      }
+      .boot-brand { width: 130px; height: 26px; }
+      .boot-nav { display: none; margin-left: auto; }
+      .boot-nav-item { width: 96px; height: 44px; border-radius: 14px; }
+      .boot-avatar { flex: 0 0 auto; width: 40px; height: 40px; border-radius: 50%; }
+
+      /* ---- main + tab switching ---- */
+      .boot-main {
+        flex: 1 1 auto;
+        overflow: hidden;
+        padding: 12px 12px 90px;
+        width: 100%;
+        box-sizing: border-box;
+      }
+      .boot-content { display: none; }
+      [data-boot-tab="home"] .boot-content-home,
+      [data-boot-tab="droplist"] .boot-content-droplist,
+      [data-boot-tab="emailsettings"] .boot-content-emailsettings {
+        display: grid;
+        gap: 12px;
+      }
+
+      /* ---- card base ---- */
+      .boot-card {
+        background: #ffffff;
+        border: 1px solid #cad6e8;
+        border-radius: 12px;
+        padding: 14px;
+        box-shadow: 0 2px 8px rgba(20, 30, 60, 0.04);
+      }
+      [data-theme="dark"] .boot-card {
+        background: #11131a;
+        border-color: #2d3344;
+        box-shadow: none;
+      }
+
+      /* ---- home layout ---- */
+      .boot-stat-row { display: grid; grid-template-columns: 1fr; gap: 12px; }
+      .boot-stat-card {
+        background: #ffffff;
+        border: 1px solid #cad6e8;
+        border-radius: 12px;
+        padding: 14px;
+        height: 84px;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 10px;
+      }
+      [data-theme="dark"] .boot-stat-card { background: #11131a; border-color: #2d3344; }
+      .boot-stat-line-1 { width: 60%; height: 14px; }
+      .boot-stat-line-2 { width: 45%; height: 18px; }
+
+      .boot-form-card { display: grid; gap: 10px; }
+      .boot-form-title { width: 60%; max-width: 220px; height: 22px; }
+      .boot-form-input { height: 44px; border-radius: 12px; }
+      .boot-form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      .boot-form-button { height: 48px; border-radius: 12px; }
+
+      .boot-howit-card { display: grid; grid-template-columns: 1fr; gap: 14px; }
+      .boot-howit-step {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 0;
+      }
+      .boot-howit-circle { width: 64px; height: 64px; border-radius: 50%; }
+      .boot-howit-label { width: 110px; height: 16px; }
+      .boot-howit-text { width: 80%; max-width: 260px; height: 14px; }
+
+      /* ---- droplist layout ---- */
+      .boot-page-header {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-bottom: 4px;
+      }
+      .boot-page-title-block { display: flex; flex-direction: column; gap: 6px; }
+      .boot-page-title { width: 200px; height: 26px; }
+      .boot-page-sub { width: 240px; height: 14px; }
+      .boot-page-sort { width: 100%; height: 44px; border-radius: 8px; }
+
+      .boot-product-card { display: grid; gap: 14px; }
+      .boot-product-head { display: flex; flex-direction: column; gap: 8px; }
+      .boot-product-head-left { display: flex; flex-direction: column; gap: 8px; }
+      .boot-product-title { width: 65%; max-width: 280px; height: 22px; }
+      .boot-product-badge { width: 92px; height: 22px; border-radius: 99px; }
+      .boot-product-link { width: 110px; height: 16px; }
+      .boot-product-meta { width: 220px; max-width: 80%; height: 14px; }
+      .boot-product-head-actions { display: flex; align-self: flex-end; }
+      .boot-icon-btn { width: 72px; height: 36px; border-radius: 10px; }
+
+      .boot-product-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+      .boot-mini-box {
+        border: 1px solid #dce5f3;
+        border-radius: 12px;
+        padding: 12px;
+        background: #f8fbff;
+        display: grid;
+        gap: 8px;
+      }
+      [data-theme="dark"] .boot-mini-box { background: #13151e; border-color: #2a2f40; }
+      .boot-mini-label { width: 70%; max-width: 105px; height: 14px; }
+      .boot-mini-value { width: 90px; height: 22px; }
+      .boot-mini-value-tall { width: 100%; height: 42px; border-radius: 12px; }
+
+      .boot-product-primary-btn { width: 100%; height: 46px; border-radius: 12px; }
+      .boot-product-history-btn { width: 100%; height: 38px; border-radius: 10px; }
+
+      /* ---- email layout ---- */
+      .boot-email-panel { display: grid; gap: 14px; }
+      .boot-email-toggle-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+      }
+      .boot-email-toggle-label-block {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        flex: 1;
+        min-width: 0;
+      }
+      .boot-email-toggle-title { width: 110px; height: 18px; }
+      .boot-email-toggle-sub { width: 80%; max-width: 280px; height: 14px; }
+      .boot-email-toggle { flex: 0 0 auto; width: 56px; height: 28px; border-radius: 99px; }
+
+      .boot-email-primary { width: 100%; height: 56px; border-radius: 8px; }
+
+      .boot-email-add-section { display: grid; gap: 6px; }
+      .boot-email-add-label { width: 160px; height: 14px; }
+      .boot-email-add-row { display: flex; gap: 8px; }
+      .boot-email-add-input { flex: 1; height: 44px; border-radius: 12px; }
+      .boot-email-add-btn { flex: 0 0 auto; width: 72px; height: 44px; border-radius: 12px; }
+
+      .boot-email-howit { display: grid; gap: 10px; }
+      .boot-email-howit-title { width: 130px; height: 20px; }
+      .boot-email-howit-line { height: 14px; }
+      .boot-email-howit-line:nth-of-type(1) { width: 90%; }
+      .boot-email-howit-line:nth-of-type(2) { width: 75%; }
+      .boot-email-howit-line:nth-of-type(3) { width: 95%; }
+
+      /* ---- mobile bottom nav ---- */
+      .boot-mobile-nav {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 100;
+        display: flex;
+        justify-content: space-around;
+        padding: 8px 0 max(10px, env(safe-area-inset-bottom));
+        background: #ffffff;
+        border-top: 1px solid #cad6e8;
+        box-shadow: 0 -2px 10px rgba(20, 30, 60, 0.05);
+      }
+      [data-theme="dark"] .boot-mobile-nav {
+        background: #11131a;
+        border-top-color: #2d3344;
+        box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.4);
+      }
+      .boot-mobile-nav-item {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 10px 12px;
+        min-width: 64px;
+      }
+      .boot-mobile-nav-block { width: 56px; height: 18px; }
+
+      /* ---- responsive: small mobile (≤600) ---- */
+      @media (max-width: 600px) {
+        .boot-howit-circle { width: 64px; height: 64px; }
+      }
+
+      /* ---- responsive: tablet (≥601) ---- */
+      @media (min-width: 601px) {
+        .boot-howit-circle { width: 86px; height: 86px; }
+        .boot-page-header {
+          flex-direction: row;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 16px;
+        }
+        .boot-page-sort { width: 220px; align-self: flex-start; }
+      }
+
+      /* ---- responsive: desktop (≥981) — grid breakpoint matches App.css ---- */
+      @media (min-width: 981px) {
+        .boot-main { padding: 18px 18px 90px; }
+        [data-boot-tab="home"] .boot-content-home,
+        [data-boot-tab="droplist"] .boot-content-droplist,
+        [data-boot-tab="emailsettings"] .boot-content-emailsettings { gap: 14px; }
+        .boot-card { padding: 20px; border-radius: 14px; }
+        .boot-stat-row { grid-template-columns: repeat(3, 1fr); gap: 14px; }
+        .boot-stat-card { height: 90px; padding: 18px; border-radius: 14px; }
+        .boot-howit-card { grid-template-columns: repeat(3, 1fr); gap: 20px; }
+        .boot-product-grid { grid-template-columns: repeat(3, 1fr); }
+        .boot-product-head {
+          flex-direction: row;
+          justify-content: space-between;
+          gap: 12px;
+        }
+        .boot-product-head-left { flex: 1; min-width: 0; }
+        .boot-product-head-actions { align-self: flex-start; }
+        .boot-product-primary-btn { width: 240px; }
+      }
+
+      /* ---- responsive: wide desktop (≥1024) — top-nav appears, bottom-nav hides ---- */
+      @media (min-width: 1024px) {
+        .boot-topbar { height: 78px; gap: 20px; padding: 0 20px; }
+        .boot-logo { width: 56px; height: 56px; border-radius: 17px; font-size: 40px; }
+        .boot-brand { width: 170px; height: 32px; }
+        .boot-avatar { width: 44px; height: 44px; }
+        .boot-nav { display: flex; align-items: center; gap: 10px; }
+        .boot-mobile-nav { display: none; }
+        .boot-main { padding-bottom: 18px; }
+      }
+
+      /* ---- reduced motion ---- */
+      @media (prefers-reduced-motion: reduce) {
+        .boot-logo { animation: none; }
+        .boot-skel::after { animation: none; display: none; }
+      }
+    </style>
     <link rel="icon" type="image/svg+xml" href="/icons/icon-192.svg" />
 
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -51,7 +349,240 @@
     <title>Traker - Price Tracker</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="boot-shell" aria-hidden="true">
+        <header class="boot-topbar">
+          <div class="boot-topbar-left">
+            <div class="boot-logo">T</div>
+            <div class="boot-brand boot-skel"></div>
+          </div>
+          <nav class="boot-nav">
+            <div class="boot-nav-item boot-skel"></div>
+            <div class="boot-nav-item boot-skel"></div>
+            <div class="boot-nav-item boot-skel"></div>
+          </nav>
+          <div class="boot-avatar boot-skel"></div>
+        </header>
+
+        <main class="boot-main">
+          <!-- Home layout -->
+          <div class="boot-content boot-content-home">
+            <div class="boot-stat-row">
+              <div class="boot-stat-card">
+                <div class="boot-stat-line-1 boot-skel"></div>
+                <div class="boot-stat-line-2 boot-skel"></div>
+              </div>
+              <div class="boot-stat-card">
+                <div class="boot-stat-line-1 boot-skel"></div>
+                <div class="boot-stat-line-2 boot-skel"></div>
+              </div>
+              <div class="boot-stat-card">
+                <div class="boot-stat-line-1 boot-skel"></div>
+                <div class="boot-stat-line-2 boot-skel"></div>
+              </div>
+            </div>
+            <div class="boot-card boot-form-card">
+              <div class="boot-form-title boot-skel"></div>
+              <div class="boot-form-input boot-skel"></div>
+              <div class="boot-form-row">
+                <div class="boot-form-input boot-skel"></div>
+                <div class="boot-form-input boot-skel"></div>
+              </div>
+              <div class="boot-form-button boot-skel"></div>
+            </div>
+            <div class="boot-card boot-howit-card">
+              <div class="boot-howit-step">
+                <div class="boot-howit-circle boot-skel"></div>
+                <div class="boot-howit-label boot-skel"></div>
+                <div class="boot-howit-text boot-skel"></div>
+              </div>
+              <div class="boot-howit-step">
+                <div class="boot-howit-circle boot-skel"></div>
+                <div class="boot-howit-label boot-skel"></div>
+                <div class="boot-howit-text boot-skel"></div>
+              </div>
+              <div class="boot-howit-step">
+                <div class="boot-howit-circle boot-skel"></div>
+                <div class="boot-howit-label boot-skel"></div>
+                <div class="boot-howit-text boot-skel"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Droplist layout -->
+          <div class="boot-content boot-content-droplist">
+            <div class="boot-page-header">
+              <div class="boot-page-title-block">
+                <div class="boot-page-title boot-skel"></div>
+                <div class="boot-page-sub boot-skel"></div>
+              </div>
+              <div class="boot-page-sort boot-skel"></div>
+            </div>
+            <div class="boot-card boot-product-card">
+              <div class="boot-product-head">
+                <div class="boot-product-head-left">
+                  <div class="boot-product-title boot-skel"></div>
+                  <div class="boot-product-badge boot-skel"></div>
+                  <div class="boot-product-link boot-skel"></div>
+                  <div class="boot-product-meta boot-skel"></div>
+                </div>
+                <div class="boot-product-head-actions">
+                  <div class="boot-icon-btn boot-skel"></div>
+                </div>
+              </div>
+              <div class="boot-product-grid">
+                <div class="boot-mini-box">
+                  <div class="boot-mini-label boot-skel"></div>
+                  <div class="boot-mini-value boot-skel"></div>
+                </div>
+                <div class="boot-mini-box">
+                  <div class="boot-mini-label boot-skel"></div>
+                  <div class="boot-mini-value-tall boot-skel"></div>
+                </div>
+                <div class="boot-mini-box">
+                  <div class="boot-mini-label boot-skel"></div>
+                  <div class="boot-mini-value-tall boot-skel"></div>
+                </div>
+              </div>
+              <div class="boot-product-primary-btn boot-skel"></div>
+              <div class="boot-product-history-btn boot-skel"></div>
+            </div>
+            <div class="boot-card boot-product-card">
+              <div class="boot-product-head">
+                <div class="boot-product-head-left">
+                  <div class="boot-product-title boot-skel"></div>
+                  <div class="boot-product-badge boot-skel"></div>
+                  <div class="boot-product-link boot-skel"></div>
+                  <div class="boot-product-meta boot-skel"></div>
+                </div>
+                <div class="boot-product-head-actions">
+                  <div class="boot-icon-btn boot-skel"></div>
+                </div>
+              </div>
+              <div class="boot-product-grid">
+                <div class="boot-mini-box">
+                  <div class="boot-mini-label boot-skel"></div>
+                  <div class="boot-mini-value boot-skel"></div>
+                </div>
+                <div class="boot-mini-box">
+                  <div class="boot-mini-label boot-skel"></div>
+                  <div class="boot-mini-value-tall boot-skel"></div>
+                </div>
+                <div class="boot-mini-box">
+                  <div class="boot-mini-label boot-skel"></div>
+                  <div class="boot-mini-value-tall boot-skel"></div>
+                </div>
+              </div>
+              <div class="boot-product-primary-btn boot-skel"></div>
+              <div class="boot-product-history-btn boot-skel"></div>
+            </div>
+            <div class="boot-card boot-product-card">
+              <div class="boot-product-head">
+                <div class="boot-product-head-left">
+                  <div class="boot-product-title boot-skel"></div>
+                  <div class="boot-product-badge boot-skel"></div>
+                  <div class="boot-product-link boot-skel"></div>
+                  <div class="boot-product-meta boot-skel"></div>
+                </div>
+                <div class="boot-product-head-actions">
+                  <div class="boot-icon-btn boot-skel"></div>
+                </div>
+              </div>
+              <div class="boot-product-grid">
+                <div class="boot-mini-box">
+                  <div class="boot-mini-label boot-skel"></div>
+                  <div class="boot-mini-value boot-skel"></div>
+                </div>
+                <div class="boot-mini-box">
+                  <div class="boot-mini-label boot-skel"></div>
+                  <div class="boot-mini-value-tall boot-skel"></div>
+                </div>
+                <div class="boot-mini-box">
+                  <div class="boot-mini-label boot-skel"></div>
+                  <div class="boot-mini-value-tall boot-skel"></div>
+                </div>
+              </div>
+              <div class="boot-product-primary-btn boot-skel"></div>
+              <div class="boot-product-history-btn boot-skel"></div>
+            </div>
+            <div class="boot-card boot-product-card">
+              <div class="boot-product-head">
+                <div class="boot-product-head-left">
+                  <div class="boot-product-title boot-skel"></div>
+                  <div class="boot-product-badge boot-skel"></div>
+                  <div class="boot-product-link boot-skel"></div>
+                  <div class="boot-product-meta boot-skel"></div>
+                </div>
+                <div class="boot-product-head-actions">
+                  <div class="boot-icon-btn boot-skel"></div>
+                </div>
+              </div>
+              <div class="boot-product-grid">
+                <div class="boot-mini-box">
+                  <div class="boot-mini-label boot-skel"></div>
+                  <div class="boot-mini-value boot-skel"></div>
+                </div>
+                <div class="boot-mini-box">
+                  <div class="boot-mini-label boot-skel"></div>
+                  <div class="boot-mini-value-tall boot-skel"></div>
+                </div>
+                <div class="boot-mini-box">
+                  <div class="boot-mini-label boot-skel"></div>
+                  <div class="boot-mini-value-tall boot-skel"></div>
+                </div>
+              </div>
+              <div class="boot-product-primary-btn boot-skel"></div>
+              <div class="boot-product-history-btn boot-skel"></div>
+            </div>
+          </div>
+
+          <!-- Email Settings layout -->
+          <div class="boot-content boot-content-emailsettings">
+            <div class="boot-page-header">
+              <div class="boot-page-title-block">
+                <div class="boot-page-title boot-skel"></div>
+                <div class="boot-page-sub boot-skel"></div>
+              </div>
+            </div>
+            <div class="boot-card boot-email-panel">
+              <div class="boot-email-toggle-row">
+                <div class="boot-email-toggle-label-block">
+                  <div class="boot-email-toggle-title boot-skel"></div>
+                  <div class="boot-email-toggle-sub boot-skel"></div>
+                </div>
+                <div class="boot-email-toggle boot-skel"></div>
+              </div>
+              <div class="boot-email-primary boot-skel"></div>
+              <div class="boot-email-add-section">
+                <div class="boot-email-add-label boot-skel"></div>
+                <div class="boot-email-add-row">
+                  <div class="boot-email-add-input boot-skel"></div>
+                  <div class="boot-email-add-btn boot-skel"></div>
+                </div>
+              </div>
+            </div>
+            <div class="boot-card boot-email-howit">
+              <div class="boot-email-howit-title boot-skel"></div>
+              <div class="boot-email-howit-line boot-skel"></div>
+              <div class="boot-email-howit-line boot-skel"></div>
+              <div class="boot-email-howit-line boot-skel"></div>
+            </div>
+          </div>
+        </main>
+
+        <nav class="boot-mobile-nav">
+          <div class="boot-mobile-nav-item">
+            <div class="boot-mobile-nav-block boot-skel"></div>
+          </div>
+          <div class="boot-mobile-nav-item">
+            <div class="boot-mobile-nav-block boot-skel"></div>
+          </div>
+          <div class="boot-mobile-nav-item">
+            <div class="boot-mobile-nav-block boot-skel"></div>
+          </div>
+        </nav>
+      </div>
+    </div>
     <noscript>
       <h1>Traker - Price Tracker</h1>
       <p>Track product prices and get notified when they drop.</p>
