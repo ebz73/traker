@@ -48,9 +48,11 @@ function AppShell() {
       <TopBar />
 
       <main className="shell" id="main-content">
-        {tab === 'home' && <HomeTab />}
-        {tab === 'droplist' && <DroplistTab />}
-        {tab === 'emailSettings' && <EmailSettingsTab />}
+        <div key={tab} className="tabPane">
+          {tab === 'home' && <HomeTab />}
+          {tab === 'droplist' && <DroplistTab />}
+          {tab === 'emailSettings' && <EmailSettingsTab />}
+        </div>
       </main>
 
       <ExtensionPromptModal

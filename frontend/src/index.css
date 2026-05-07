@@ -80,6 +80,12 @@
   */
 }
 
+@media (max-height: 500px) {
+  h1 { font-size: 1.2em; }
+  h2 { font-size: 1.05em; }
+  h3 { font-size: 0.95em; }
+}
+
 /* Preserve existing global resets */
 :root {
   font-family: var(--font-sans);

@@ -720,7 +720,7 @@ function stopExtensionJobPolling() {
 function startExtensionJobPolling() {
   if (!isValidApiUrl(API_BASE_URL) || !cachedAuthToken) return;
   pollForJobs();
-  chrome.alarms.create(JOB_POLL_ALARM, { periodInMinutes: 1 });
+  chrome.alarms.create(JOB_POLL_ALARM, { periodInMinutes: 0.5 });
 }
 
 function notifyWebPickResult(pendingPick, data) {

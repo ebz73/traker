@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import { EMPTY_HISTORY, FREQUENCIES, HISTORY_WINDOWS } from '../constants'
 import { getPriceTrend, getWebsiteNameFallback, normalizeFrequency } from '../utils'
 import ChartErrorBoundary from './ChartErrorBoundary'
@@ -274,4 +274,4 @@ function ProductCard({
   )
 }
 
-export default ProductCard
+export default memo(ProductCard)

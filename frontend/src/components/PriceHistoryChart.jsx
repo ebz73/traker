@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { DAY_IN_MS } from '../constants'
 import {
   buildSmoothPath,
@@ -10,11 +10,6 @@ import {
 } from '../utils'
 
 function PriceHistoryChart({ history, fallbackCurrencyCode, days, referenceTimestamp, threshold }) {
-  const [hoverInfo, setHoverInfo] = useState(null)
-  const chartId = useId().replace(/:/g, '')
-  const clipPathId = `${chartId}-price-chart-clip`
-  const gradientId = `${chartId}-price-chart-fill`
-
   const chartData = useMemo(() => {
     const referenceTimestampMs = new Date(referenceTimestamp || '').getTime()
     const latestHistoryTimestamp = history.reduce((latest, item) => {
@@ -69,9 +64,28 @@ function PriceHistoryChart({ history, fallbackCurrencyCode, days, referenceTimes
     )
   }
 
+  return (
+    <PriceHistoryChartContent
+      chartData={chartData}
+      fallbackCurrencyCode={fallbackCurrencyCode}
+      threshold={threshold}
+    />
+  )
+}
+
+function PriceHistoryChartContent({ chartData, fallbackCurrencyCode, threshold }) {
+  const [hoverInfo, setHoverInfo] = useState(null)
+  const chartId = useId().replace(/:/g, '')
+  const hitboxRef = useRef(null)
+  const touchHandlerRef = useRef(null)
+  const clipPathId = `${chartId}-price-chart-clip`
+  const gradientId = `${chartId}-price-chart-fill`
+
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 600
+  const isMobileLandscape = typeof window !== 'undefined' && window.innerHeight < 500
+  const isMobilePortrait = isMobile && !isMobileLandscape
   const chartWidth = 980
-  const chartHeight = isMobile ? 450 : 300
+  const chartHeight = isMobileLandscape ? 220 : isMobile ? 620 : 300
   const minTimestamp = chartData[0].timestampMs
   const maxTimestamp = chartData[chartData.length - 1].timestampMs
   const timestampRange = Math.max(0, maxTimestamp - minTimestamp)
@@ -79,24 +93,37 @@ function PriceHistoryChart({ history, fallbackCurrencyCode, days, referenceTimes
 
   const minPriceRaw = Math.min(...chartData.map((point) => point.price))
   const maxPriceRaw = Math.max(...chartData.map((point) => point.price))
-  const priceRangePadding = Math.max(1, (maxPriceRaw - minPriceRaw) * 0.05)
-  const { niceMin: minPrice, niceMax: maxPrice, tickSpacing } = niceScale(
-    minPriceRaw - priceRangePadding,
-    maxPriceRaw + priceRangePadding,
-    5,
-  )
+  const dataMidpoint = (minPriceRaw + maxPriceRaw) / 2
+  const dataRange = maxPriceRaw - minPriceRaw
+  // For near-flat data, sit just above niceScale's 5% near-flat threshold so it skips
+  // amplification — otherwise flat $130 data renders with $10 of empty halo each side.
+  const isNearlyFlat = dataMidpoint > 0 && dataRange / dataMidpoint < 0.05
+  let domainMin
+  let domainMax
+  if (isNearlyFlat) {
+    const halfRange = dataMidpoint * 0.026
+    domainMin = Math.max(0, dataMidpoint - halfRange)
+    domainMax = dataMidpoint + halfRange
+  } else {
+    const padding = dataRange * 0.05
+    domainMin = minPriceRaw - padding
+    domainMax = maxPriceRaw + padding
+  }
+  const { niceMin: minPrice, niceMax: maxPrice, tickSpacing } = niceScale(domainMin, domainMax, 5)
   const priceRange = Math.max(Number.EPSILON, maxPrice - minPrice)
   const yTickCount = Math.min(20, Math.max(2, Math.round((maxPrice - minPrice) / tickSpacing) + 1))
   const yTickValues = Array.from({ length: yTickCount }, (_, index) => Number((minPrice + index * tickSpacing).toFixed(12))).reverse()
   const estimatedMaxLabelWidth = yTickValues.reduce((maxLabelWidth, value) => {
     const label = formatAxisTick(value, chartCurrencyCode, tickSpacing)
-    return Math.max(maxLabelWidth, label.length * 6.5)
+    return Math.max(maxLabelWidth, label.length * (isMobilePortrait ? 6 : 6.5))
   }, 0)
   const margin = {
     top: 14,
-    right: isMobile ? 12 : 16,
+    right: isMobile ? 6 : 16,
     bottom: isMobile ? 50 : 40,
-    left: Math.max(56, estimatedMaxLabelWidth + 16),
+    left: isMobilePortrait
+      ? Math.max(44, estimatedMaxLabelWidth + 12)
+      : Math.max(56, estimatedMaxLabelWidth + 16),
   }
   const plotWidth = chartWidth - margin.left - margin.right
   const plotHeight = chartHeight - margin.top - margin.bottom
@@ -232,6 +259,25 @@ function PriceHistoryChart({ history, fallbackCurrencyCode, days, referenceTimes
     event.preventDefault()
     updateHoverFromClientX(touch.clientX, event.currentTarget.getBoundingClientRect())
   }
+
+  // React's synthetic touch events are passive; bind natively so preventDefault works.
+  useEffect(() => {
+    const hitbox = hitboxRef.current
+    if (!hitbox) return
+    const onTouchStart = (e) => e.preventDefault()
+    const onTouchMove = (e) => touchHandlerRef.current?.(e)
+    hitbox.addEventListener('touchstart', onTouchStart, { passive: false })
+    hitbox.addEventListener('touchmove', onTouchMove, { passive: false })
+    return () => {
+      hitbox.removeEventListener('touchstart', onTouchStart)
+      hitbox.removeEventListener('touchmove', onTouchMove)
+    }
+  }, [])
+
+  // Ref must track latest closure on every render — no deps array is intentional.
+  useEffect(() => {
+    touchHandlerRef.current = handleTouchMove
+  })
 
   const tooltipWidth = isMobile ? 160 : (includeTimeInTicks ? 230 : 170)
   const tooltipHeight = isMobile ? 72 : 88
@@ -459,14 +505,13 @@ function PriceHistoryChart({ history, fallbackCurrencyCode, days, referenceTimes
         )}
 
         <rect
+          ref={hitboxRef}
           x={margin.left}
           y={margin.top}
           width={plotWidth}
           height={plotHeight}
           className="priceChartHitbox"
-          onTouchStart={(e) => e.preventDefault()}
           onMouseMove={handleMouseMove}
-          onTouchMove={handleTouchMove}
           onTouchEnd={() => setHoverInfo(null)}
           onMouseLeave={() => setHoverInfo(null)}
         />

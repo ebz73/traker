@@ -41,12 +41,12 @@ export default function TopBar() {
   ].join(' ')
 
   return (
-    <header className="flex items-center justify-between h-15 gap-3 px-3.5 bg-(--nav-bg) border-b border-(--line) lg:h-19.5 lg:gap-5 lg:px-5">
+    <header className="flex items-center justify-between h-15 [@media(max-height:500px)]:h-11 gap-3 px-3.5 bg-(--nav-bg) border-b border-(--line) lg:h-19.5 lg:gap-5 lg:px-5">
       <div className="flex items-center gap-3.5">
-        <div className="grid place-items-center w-10 h-10 rounded-xl text-[28px] font-bold text-(--on-brand) bg-linear-[160deg,var(--brand-logo-start),var(--brand-logo-end)] lg:w-14 lg:h-14 lg:rounded-[17px] lg:text-[40px]">
+        <div className="grid place-items-center w-10 h-10 [@media(max-height:500px)]:w-8 [@media(max-height:500px)]:h-8 rounded-xl text-[28px] [@media(max-height:500px)]:text-[20px] font-bold text-(--on-brand) bg-linear-[160deg,var(--brand-logo-start),var(--brand-logo-end)] lg:w-14 lg:h-14 lg:rounded-[17px] lg:text-[40px]">
           T
         </div>
-        <h1 className="m-0 tracking-[0.5px] text-3xl lg:text-4xl">
+        <h1 className="m-0 tracking-[0.5px] text-3xl [@media(max-height:500px)]:hidden lg:text-4xl">
           TRAKER
         </h1>
       </div>
@@ -55,7 +55,7 @@ export default function TopBar() {
         <nav
           className={[
             'fixed bottom-0 left-0 right-0 z-100 flex justify-around gap-0',
-            'py-2 pb-[max(0.625rem,env(safe-area-inset-bottom))] px-0',
+            'py-2 [@media(max-height:500px)]:py-1 pb-[max(0.625rem,env(safe-area-inset-bottom))] [@media(max-height:500px)]:pb-[max(0.25rem,env(safe-area-inset-bottom))] px-0',
             'bg-(--nav-bg) border-t border-(--line) shadow-[0_-2px_10px_var(--shadow-nav)]',
             'transition-transform duration-300 ease-in-out',
             navHidden ? 'translate-y-full' : 'translate-y-0',
